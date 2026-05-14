@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "x-defi-agent-workers"
+version = "0.0.1"
+description = "Python workers for the x-defi-agent project: ingest, scoring, story building, draft generation."
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+dependencies = [
+    "anthropic>=0.39.0",
+    "httpx>=0.27.0",
+    "psycopg[binary,pool]>=3.2.0",
+    "python-dotenv>=1.0.1",
+    "telethon>=1.36.0",
+    "tenacity>=8.5.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.4.0",
+    "rich>=13.7.0",
+    "typer>=0.12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+]
+graphics = [
+    "matplotlib>=3.9.0",
+    "plotly>=5.22.0",
+    "kaleido>=0.2.1",
+    "playwright>=1.45.0",
+]
+onchain = [
+    "web3>=6.20.0",
+]
+
+[project.scripts]
+agent = "workers.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
