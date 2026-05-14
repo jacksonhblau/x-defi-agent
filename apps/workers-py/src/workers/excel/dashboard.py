@@ -109,6 +109,26 @@ def _fetch_all(query: str, params: tuple = ()) -> list[dict[str, Any]]:
         return cur.fetchall()
 
 
+def _excel_safe(v: Any) -> Any:
+    """Coerce a value to something openpyxl accepts.
+
+    Strips tzinfo from datetimes (Excel does not support tz-aware datetimes).
+    Converts bools to YES/NO strings for friendlier inline editing.
+    Leaves everything else alone.
+    """
+    if isinstance(v, datetime) and v.tzinfo is not None:
+        return v.astimezone(timezone.utc).replace(tzinfo=None)
+    if isinstance(v, bool):
+        return "YES" if v else "NO"
+    return v
+
+
+def _write_row(ws: Worksheet, row_idx: int, columns: list[str], row: dict[str, Any]) -> None:
+    """Write a row's values into the sheet using _excel_safe coercion."""
+    for c_idx, col in enumerate(columns, start=1):
+        ws.cell(row=row_idx, column=c_idx, value=_excel_safe(row.get(col)))
+
+
 # =============================================================================
 # Sheet writers
 # =============================================================================
@@ -149,8 +169,7 @@ def write_drafts(wb: Workbook) -> None:
     )
     _style_header(ws, DRAFTS_COLUMNS)
     for r_idx, row in enumerate(rows, start=2):
-        for c_idx, col in enumerate(DRAFTS_COLUMNS, start=1):
-            ws.cell(row=r_idx, column=c_idx, value=row.get(col))
+        _write_row(ws, r_idx, DRAFTS_COLUMNS, row)
     _style_rows(ws, DRAFTS_COLUMNS, len(rows), EDITABLE_COLUMNS["Drafts"])
     _autosize(ws, DRAFTS_COLUMNS, maxw=80)
 
@@ -173,12 +192,7 @@ def write_run_jobs(wb: Workbook) -> None:
     )
     _style_header(ws, RUN_JOBS_COLUMNS)
     for r_idx, row in enumerate(rows, start=2):
-        for c_idx, col in enumerate(RUN_JOBS_COLUMNS, start=1):
-            v = row.get(col)
-            # Convert booleans to YES/NO for friendly editing
-            if isinstance(v, bool):
-                v = "YES" if v else "NO"
-            ws.cell(row=r_idx, column=c_idx, value=v)
+        _write_row(ws, r_idx, RUN_JOBS_COLUMNS, row)
     _style_rows(ws, RUN_JOBS_COLUMNS, len(rows), EDITABLE_COLUMNS["Run Jobs"])
     _autosize(ws, RUN_JOBS_COLUMNS, maxw=60)
 
@@ -199,8 +213,7 @@ def write_stories(wb: Workbook) -> None:
     )
     _style_header(ws, STORIES_COLUMNS)
     for r_idx, row in enumerate(rows, start=2):
-        for c_idx, col in enumerate(STORIES_COLUMNS, start=1):
-            ws.cell(row=r_idx, column=c_idx, value=row.get(col))
+        _write_row(ws, r_idx, STORIES_COLUMNS, row)
     _style_rows(ws, STORIES_COLUMNS, len(rows), EDITABLE_COLUMNS.get("Stories", set()))
     _autosize(ws, STORIES_COLUMNS, maxw=70)
 
@@ -221,8 +234,7 @@ def write_signals(wb: Workbook) -> None:
     )
     _style_header(ws, SIGNALS_COLUMNS)
     for r_idx, row in enumerate(rows, start=2):
-        for c_idx, col in enumerate(SIGNALS_COLUMNS, start=1):
-            ws.cell(row=r_idx, column=c_idx, value=row.get(col))
+        _write_row(ws, r_idx, SIGNALS_COLUMNS, row)
     _style_rows(ws, SIGNALS_COLUMNS, len(rows), EDITABLE_COLUMNS.get("Signals", set()))
     _autosize(ws, SIGNALS_COLUMNS, maxw=60)
 
@@ -256,8 +268,7 @@ def write_posts(wb: Workbook) -> None:
     )
     _style_header(ws, POSTS_COLUMNS)
     for r_idx, row in enumerate(rows, start=2):
-        for c_idx, col in enumerate(POSTS_COLUMNS, start=1):
-            ws.cell(row=r_idx, column=c_idx, value=row.get(col))
+        _write_row(ws, r_idx, POSTS_COLUMNS, row)
     _style_rows(ws, POSTS_COLUMNS, len(rows), EDITABLE_COLUMNS.get("Posts", set()))
     _autosize(ws, POSTS_COLUMNS, maxw=80)
 
@@ -296,9 +307,9 @@ def write_config(wb: Workbook) -> None:
     th = config.thresholds()
     _style_header(ws, CONFIG_COLUMNS)
     for r_idx, (key, desc) in enumerate(CONFIG_KEYS, start=2):
-        ws.cell(row=r_idx, column=1, value=key)
-        ws.cell(row=r_idx, column=2, value=_read_nested(th, key))
-        ws.cell(row=r_idx, column=3, value=desc)
+        ws.cell(row=r_idx, column=1, value=_excel_safe(key))
+        ws.cell(row=r_idx, column=2, value=_excel_safe(_read_nested(th, key)))
+        ws.cell(row=r_idx, column=3, value=_excel_safe(desc))
     _style_rows(ws, CONFIG_COLUMNS, len(CONFIG_KEYS), EDITABLE_COLUMNS["Config"])
     _autosize(ws, CONFIG_COLUMNS, maxw=80)
 
@@ -316,11 +327,7 @@ def write_watchlist(wb: Workbook) -> None:
             rows.append({"handle": handle, "category": category, "weight": weight, "enabled": True})
     _style_header(ws, WATCHLIST_COLUMNS)
     for r_idx, row in enumerate(rows, start=2):
-        for c_idx, col in enumerate(WATCHLIST_COLUMNS, start=1):
-            v = row.get(col)
-            if isinstance(v, bool):
-                v = "YES" if v else "NO"
-            ws.cell(row=r_idx, column=c_idx, value=v)
+        _write_row(ws, r_idx, WATCHLIST_COLUMNS, row)
     _style_rows(ws, WATCHLIST_COLUMNS, len(rows), EDITABLE_COLUMNS["Watchlist"])
     _autosize(ws, WATCHLIST_COLUMNS, maxw=40)
 
