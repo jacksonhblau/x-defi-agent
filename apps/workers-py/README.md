@@ -1,16 +1,43 @@
 # workers-py
 
-Python workers for x-defi-agent. Handles ingest, materiality scoring, story building, and draft generation. Posting to X is handled by `../poster-ts`.
+Python workers for x-defi-agent. Handles ingest, materiality scoring, story building, and draft generation, plus the Excel dashboard, X poster, scheduler, and watch loop.
 
 ## Setup
 
 ```
 cd apps/workers-py
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
+pip install -e . --config-settings editable_mode=compat
 ```
 
+The `--config-settings editable_mode=compat` flag is **important** because the project path contains spaces ("DeFi X Poster"). Modern pip's PEP 660 editable installs (the default since pip 25+) can break intermittently on space-containing paths. The `compat` flag falls back to the older `.egg-link` mechanism which handles spaces correctly.
+
 Environment variables are read from `../../.env` (project root). See `../../.env.example` for the full list.
+
+## Troubleshooting
+
+**`ModuleNotFoundError: No module named 'workers'`**
+
+The editable install link broke. Repair without nuking the venv:
+
+```
+cd apps/workers-py
+source .venv/bin/activate
+pip install -e . --config-settings editable_mode=compat
+agent --help    # canary: should print the command list
+```
+
+If that doesn't fix it, nuke the venv and rebuild:
+
+```
+deactivate 2>/dev/null
+rm -rf .venv
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e . --config-settings editable_mode=compat
+```
+
+**Don't run `pip install --upgrade pip` in this venv.** Pip self-upgrades are the most common cause of broken editable installs here. If you have to upgrade pip, immediately follow it with `pip install -e . --config-settings editable_mode=compat` to repair the link.
 
 ## Commands
 

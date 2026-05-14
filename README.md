@@ -36,13 +36,34 @@ data/              Local runtime artifacts (sessions, sqlite caches). Gitignored
    ```
    cd apps/workers-py
    python3 -m venv .venv && source .venv/bin/activate
-   pip install -e .
+   pip install -e . --config-settings editable_mode=compat
    ```
+   The `editable_mode=compat` flag is **required** because the project path contains spaces ("DeFi X Poster"). Without it, modern pip's editable install will break intermittently and you'll see `ModuleNotFoundError: No module named 'workers'`.
 3. Run the v0 end-to-end test:
    ```
-   python -m workers.cli draft --source defillama
+   agent test-e2e --source defillama
    ```
-   This pulls one DeFiLlama signal, runs it through the materiality scorer, generates a draft via the voice prompt, and writes the result to `data/drafts/`. No X posting yet, no UI yet.
+   This pulls signals from DeFiLlama, scores them, builds stories, and generates drafts. Output goes to `data/drafts/` and to the `drafts` table in Postgres.
+
+### Day-to-day operation
+
+```
+agent watch          # long-running loop: ingest, score, draft, post on schedule
+agent excel-export   # rebuild agent_dashboard.xlsx from current DB state
+```
+
+Open `agent_dashboard.xlsx` at the project root to approve/reject drafts, tune thresholds, and toggle jobs.
+
+### Troubleshooting
+
+If you ever see `ModuleNotFoundError: No module named 'workers'`, repair with:
+
+```
+cd apps/workers-py && source .venv/bin/activate
+pip install -e . --config-settings editable_mode=compat
+```
+
+Do NOT run `pip install --upgrade pip` in this venv — it's the most common cause of the editable install breaking.
 
 ## Production deployment
 
