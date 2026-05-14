@@ -46,7 +46,8 @@ create table if not exists stories (
   created_at      timestamptz not null default now(),
   headline        text not null,
   narrative_angle text,
-  entities        text[] not null default '{}',     -- X handles + entity slugs
+  entities        text[] not null default '{}',     -- X handles to TAG as subject of analysis
+  source_handles  text[] not null default '{}',     -- X handles to CREDIT for data attribution
   key_data_points jsonb not null default '[]',
   graphic_spec    jsonb,
   format_recommendation text[] not null default '{single}',  -- subset of {'single','thread','reply','hot_take'}
@@ -54,6 +55,28 @@ create table if not exists stories (
   hot_take        boolean not null default false,
   status          text not null default 'open'      -- 'open', 'drafted', 'posted', 'killed'
 );
+
+-- Idempotent migration for the source_handles column on existing tables.
+alter table stories add column if not exists source_handles text[] not null default '{}';
+
+-- Backfill source_handles on existing stories whose array is empty,
+-- derived from each story's underlying signals.
+update stories s
+set source_handles = array(
+    select distinct case sig.source
+        when 'defillama'         then '@DefiLlama'
+        when 'rwa_xyz'           then '@rwa_xyz'
+        when 'telegram_newswire' then '@RWAxyzNewswire'
+        when 'vaultsfyi'         then '@vaultsfyi'
+        when 'bubblemaps'        then '@bubblemaps'
+        when 'etherscan'         then '@etherscan'
+        else null
+    end
+    from signals sig
+    where sig.id = any(s.signals_ids)
+      and sig.source in ('defillama','rwa_xyz','telegram_newswire','vaultsfyi','bubblemaps','etherscan')
+)
+where (source_handles is null or source_handles = '{}');
 
 create index if not exists stories_status_idx on stories (status, created_at desc);
 

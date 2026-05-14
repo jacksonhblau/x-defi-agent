@@ -93,6 +93,18 @@ def check_source_attribution(text: str, source_handles: list[str]) -> list[str]:
     return [f"missing_source_attribution:expected one of {source_handles}"]
 
 
+def check_no_leading_mention(text: str) -> list[str]:
+    """X suppresses reach on tweets starting with @-mentions (treated as directed replies).
+
+    For single posts: the body must not start with @.
+    For thread bodies (\n\n-joined string), only tweet 1 (before first \n\n) must not start with @.
+    """
+    first_tweet = text.split("\n\n", 1)[0].lstrip()
+    if first_tweet.startswith("@"):
+        return [f"leading_mention:'{first_tweet[:30]}...' — X will suppress this in the timeline"]
+    return []
+
+
 def regenerate_until_clean(
     generator_fn,
     *args,
@@ -121,7 +133,11 @@ def generate_single(story_brief: dict[str, Any]) -> dict[str, Any]:
     user = f"Story brief (JSON):\n```json\n{json.dumps(story_brief, indent=2, default=str)}\n```\n\nWrite the post."
     body = llm.complete(system=system, user=user, max_tokens=600, temperature=0.7).strip()
     source_handles = story_brief.get("source_handles", []) or []
-    flags = check_ai_tells(body) + check_source_attribution(body, source_handles)
+    flags = (
+        check_ai_tells(body)
+        + check_source_attribution(body, source_handles)
+        + check_no_leading_mention(body)
+    )
     return {
         "format": "single",
         "body": body,
@@ -154,6 +170,10 @@ def generate_thread(story_brief: dict[str, Any]) -> dict[str, Any]:
     full_thread = " ".join(tweets)
     for f in check_source_attribution(full_thread, source_handles):
         flags.append(f"thread:{f}")
+    # Tweet 1 must not start with @ (reach suppression). Subsequent tweets can.
+    if tweets:
+        for f in check_no_leading_mention(tweets[0]):
+            flags.append(f"tweet0:{f}")
     return {
         "format": "thread",
         "body": "\n\n".join(tweets),
@@ -173,3 +193,74 @@ def generate_for_story(story_brief: dict[str, Any]) -> list[dict[str, Any]]:
     if "thread" in formats:
         out.append(regenerate_until_clean(generate_thread, story_brief))
     return out
+
+
+def save_drafts_to_db(story_id: str, drafts: list[dict[str, Any]]) -> list[str]:
+    """Insert generated drafts into the drafts table. Returns inserted ids."""
+    from .. import db
+    ids: list[str] = []
+    with db.conn() as c, c.cursor() as cur:
+        for d in drafts:
+            cur.execute(
+                """
+                insert into drafts (story_id, format, body, body_json, ai_check_passed, ai_check_flags, status)
+                values (%s::uuid, %s, %s, %s::jsonb, %s, %s, 'pending')
+                returning id::text
+                """,
+                (
+                    story_id,
+                    d["format"],
+                    d["body"],
+                    json.dumps(d.get("body_json")) if d.get("body_json") else None,
+                    d.get("ai_check_passed"),
+                    d.get("ai_check_flags") or [],
+                ),
+            )
+            row = cur.fetchone()
+            if row:
+                ids.append(row[0])
+        cur.execute(
+            "update stories set status = 'drafted' where id = %s::uuid",
+            (story_id,),
+        )
+        c.commit()
+    return ids
+
+
+def draft_all_open(limit: int = 20) -> dict[str, int]:
+    """Pull all open stories and generate + persist drafts for each one.
+
+    Returns counts: {'stories': N, 'drafts': M}
+    """
+    from .. import db
+    from psycopg.rows import dict_row
+
+    with db.conn() as c, c.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            select id::text, headline, entities, source_handles, key_data_points,
+                   format_recommendation, narrative_angle
+            from stories
+            where status = 'open'
+            order by created_at desc
+            limit %s
+            """,
+            (limit,),
+        )
+        stories = cur.fetchall()
+
+    n_drafts = 0
+    for s in stories:
+        brief = {
+            "id": s["id"],
+            "headline": s["headline"],
+            "entities": s["entities"],
+            "source_handles": s.get("source_handles") or [],
+            "key_data_points": s["key_data_points"],
+            "format_recommendation": s["format_recommendation"],
+            "narrative_angle": s["narrative_angle"],
+        }
+        drafts = generate_for_story(brief)
+        ids = save_drafts_to_db(s["id"], drafts)
+        n_drafts += len(ids)
+    return {"stories": len(stories), "drafts": n_drafts}
