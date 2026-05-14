@@ -14,25 +14,54 @@ Environment variables are read from `../../.env` (project root). See `../../.env
 
 ## Commands
 
+The primary command for day-to-day use is `agent watch`. The others are for ad-hoc runs and debugging.
+
 ```
-# Run a one-shot ingest cycle for a single source
-agent ingest --source defillama
+# THE MAIN COMMAND — long-lived control loop, runs everything
+agent watch                       # default 60s interval
+agent watch --interval 30         # tighter loop
+agent watch --once                # run one cycle and exit (for cron use)
 
-# Score unprocessed signals (one-shot)
-agent score
+# Excel dashboard (called automatically by watch, exposed for manual use)
+agent excel-export                # DB → agent_dashboard.xlsx
+agent excel-apply                 # agent_dashboard.xlsx → DB
 
-# Build stories from scored signals (one-shot)
-agent build-stories
+# Individual pipeline stages (also runnable via the Excel "Run Jobs" sheet)
+agent ingest --source defillama   # one ingest cycle
+agent score                       # score unprocessed signals
+agent build-stories               # promote scored signals to stories
+agent draft                       # generate drafts for open stories
+agent post-due                    # drain scheduled_posts queue → publish to X
 
-# Generate drafts from open stories (one-shot)
-agent draft
-
-# End-to-end test: ingest → score → build → draft, write final JSON to data/drafts/
+# End-to-end test (manual)
 agent test-e2e --source defillama
 
-# Apply database migrations
+# Schema migrations
 agent migrate
 ```
+
+## How the Excel dashboard works
+
+After `agent migrate` runs once, start the control loop:
+
+```
+agent watch
+```
+
+This populates `agent_dashboard.xlsx` at the project root and refreshes it every 60 seconds. Open it in Excel or Numbers. Seven sheets:
+
+- **README** — usage notes pinned as the first sheet
+- **Drafts** — pending posts. Edit `status` to `approved` / `rejected`, edit `scheduled_for` to schedule a specific time, edit `body` if you want to revise (then set `status` to `edited`)
+- **Run Jobs** — every script the agent runs. Edit `cron` to change frequency, `enabled` to disable, set `run_now` to `YES` to trigger an ad-hoc run within ~60 seconds
+- **Stories** — story-level state (read-only)
+- **Signals** — recent signal log (read-only)
+- **Posts** — published tweets with engagement metrics at 24h and 7d (read-only)
+- **Config** — editable thresholds (materiality, novelty, daily post cap, etc.)
+- **Watchlist** — toggle monitored X accounts on/off
+
+Yellow cells are editable. Gray cells are read-only — edits there are ignored.
+
+If you have the file open in Excel when the agent tries to write, it skips that cycle and retries on the next one. Save the file (Cmd+S) to release the lock briefly so the agent can read your edits.
 
 ## Layout
 

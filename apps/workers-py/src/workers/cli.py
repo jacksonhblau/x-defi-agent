@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -161,6 +162,96 @@ def test_e2e(source: str = typer.Option("defillama")) -> None:
         if d["ai_check_flags"]:
             rprint(f"[red]AI-tell flags: {d['ai_check_flags']}[/red]")
         rprint("")
+
+
+@app.command(name="post-due")
+def post_due() -> None:
+    """Drain the scheduled_posts queue: publish any draft whose post_at has passed."""
+    from . import poster
+    result = poster.drain_due()
+    rprint(f"[green]Posted {result['posted']}, failed {result['failed']}, skipped {result['skipped']}[/green]")
+
+
+@app.command(name="excel-export")
+def excel_export() -> None:
+    """Build agent_dashboard.xlsx from current DB state."""
+    from .excel import dashboard
+    path = dashboard.export_to_excel()
+    rprint(f"[green]Exported dashboard to {path}[/green]")
+
+
+@app.command(name="excel-apply")
+def excel_apply() -> None:
+    """Read agent_dashboard.xlsx and push user edits back to DB."""
+    from .excel import dashboard
+    counts = dashboard.apply_from_excel()
+    if counts.get("skipped_locked"):
+        rprint("[yellow]Excel file is currently locked (open in Excel). Skipping apply.[/yellow]")
+        return
+    rprint(f"[green]Applied edits: {counts}[/green]")
+
+
+@app.command()
+def watch(
+    interval: int = typer.Option(60, help="Seconds between cycles"),
+    once: bool = typer.Option(False, "--once", help="Run a single cycle and exit (for cron use)"),
+) -> None:
+    """Main control loop: read Excel, run due jobs, post due drafts, write Excel back.
+
+    This is what you run on your Mac in a long-lived terminal (or under tmux/screen).
+    Edit agent_dashboard.xlsx anytime; changes apply on the next cycle.
+    """
+    from .excel import dashboard
+    from . import scheduler, poster
+
+    rprint(f"[bold]Starting watch loop (interval={interval}s, once={once})[/bold]")
+    while True:
+        cycle_started = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        rprint(f"\n[dim]── cycle {cycle_started} ──[/dim]")
+
+        # 1. Apply any user edits from Excel
+        try:
+            counts = dashboard.apply_from_excel()
+            if counts.get("skipped_locked"):
+                rprint("  [yellow]Excel locked, skipping apply this cycle[/yellow]")
+            elif any(counts.values()):
+                rprint(f"  Applied: {counts}")
+        except Exception as e:
+            rprint(f"  [red]apply_from_excel error: {e}[/red]")
+
+        # 2. Run any due jobs
+        try:
+            due = scheduler.jobs_due()
+            for job in due:
+                rprint(f"  Running [{job['name']}]: {job['command']}")
+                scheduler.mark_running(job["name"])
+                success, output = scheduler.run_command(job["command"])
+                scheduler.mark_complete(job["name"], success=success, error=None if success else output)
+                if not success:
+                    rprint(f"  [red]Job failed: {output[:300]}[/red]")
+        except Exception as e:
+            rprint(f"  [red]scheduler error: {e}[/red]")
+
+        # 3. Drain due scheduled posts (separate from job loop so even if jobs fail,
+        #    queued posts still go out)
+        try:
+            result = poster.drain_due()
+            if result["posted"] or result["failed"]:
+                rprint(f"  Poster: {result}")
+        except Exception as e:
+            rprint(f"  [red]poster error: {e}[/red]")
+
+        # 4. Re-export Excel
+        try:
+            dashboard.export_to_excel()
+        except PermissionError:
+            rprint("  [yellow]Excel locked, skipping export this cycle[/yellow]")
+        except Exception as e:
+            rprint(f"  [red]export_to_excel error: {e}[/red]")
+
+        if once:
+            return
+        time.sleep(interval)
 
 
 if __name__ == "__main__":

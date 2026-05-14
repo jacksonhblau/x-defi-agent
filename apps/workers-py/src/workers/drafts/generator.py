@@ -29,6 +29,38 @@ BANNED_PATTERNS = [
     r"It bears mentioning",
 ]
 
+# "Punctuated contrast kicker" — a complete clause followed by a short fragment
+# that negates, contrasts with, or emphasizes the prior clause. One of the strongest
+# AI tells. See packages/prompts/voice.md for examples.
+#
+# We catch the most common surface forms. The regex looks for:
+#   [. , or ;]
+#   [whitespace]
+#   [optional capital letter]
+#   [one of: Not / Real / Big / Game / End / Welcome / Plain / And / Or / But / Sounds / Just]
+#   [followed by ≤ 4 more short words]
+#   [terminal punctuation: . ? or !]
+#
+# We're deliberately conservative — false positives just trigger regeneration,
+# which is cheap. Better to flag too much than let kickers ship.
+KICKER_PATTERNS = [
+    # "X. Not Y." or "X, not Y." or "X; not Y." — the canonical case
+    r"[.,;]\s+[Nn]ot\s+(?:a |an |the )?[A-Za-z][A-Za-z'-]{1,15}(?:\s[A-Za-z][A-Za-z'-]{1,15}){0,2}[.!?]",
+    # Sentence-final fragments that are common AI kickers
+    r"[.,;]\s+Real\s+\w{2,15}[.!?]",            # "Real money." "Real capital."
+    r"[.,;]\s+Big\s+\w{2,15}[.!?]",             # "Big number." "Big move."
+    r"[.,;]\s+Game\s+(over|changer|on)[.!?]",   # "Game over." "Game changer."
+    r"[.,;]\s+End\s+of\s+\w{2,15}[.!?]",        # "End of story." "End of debate."
+    r"[.,;]\s+Welcome\s+to\s+[^.!?]{1,30}[.!?]",# "Welcome to the new..."
+    r"[.,;]\s+Plain\s+and\s+simple[.!?]",
+    r"[.,;]\s+Just\s+\w{2,12}[.!?]",            # "Just math." "Just facts."
+    r"[.,;]\s+Sounds\s+familiar[.!?]",
+    r"[.,;]\s+Make\s+it\s+make\s+sense[.!?]",
+    # "And X." / "But X." / "Or X." as standalone fragments (≤ 3 words after the conjunction)
+    r"\.\s+(And|But|Or)\s+\w{2,12}[.!?]\s*$",
+    r"\.\s+(And|But|Or)\s+\w{2,12}\s+\w{2,12}[.!?]\s*$",
+]
+
 
 def check_ai_tells(text: str) -> list[str]:
     """Return a list of flags. Empty list means clean."""
@@ -40,7 +72,45 @@ def check_ai_tells(text: str) -> list[str]:
     for pattern in BANNED_PATTERNS:
         if re.search(pattern, text, re.MULTILINE | re.IGNORECASE):
             flags.append(f"banned_pattern:{pattern}")
+    for pattern in KICKER_PATTERNS:
+        m = re.search(pattern, text, re.MULTILINE)
+        if m:
+            flags.append(f"contrast_kicker:{m.group(0).strip()!r}")
     return flags
+
+
+def check_source_attribution(text: str, source_handles: list[str]) -> list[str]:
+    """Verify at least one required source handle is present in the post body.
+
+    If source_handles is empty, attribution isn't required and we return no flags.
+    """
+    if not source_handles:
+        return []
+    lower = text.lower()
+    for handle in source_handles:
+        if handle.lower() in lower:
+            return []
+    return [f"missing_source_attribution:expected one of {source_handles}"]
+
+
+def regenerate_until_clean(
+    generator_fn,
+    *args,
+    max_attempts: int = 3,
+    **kwargs,
+) -> dict[str, Any]:
+    """Call a generator function and regenerate if any AI-tell flags fire.
+
+    Up to max_attempts; if all attempts fail, return the last result with flags
+    intact so the human reviewer sees what went wrong.
+    """
+    last = None
+    for attempt in range(max_attempts):
+        result = generator_fn(*args, **kwargs)
+        if result.get("ai_check_passed"):
+            return result
+        last = result
+    return last  # type: ignore[return-value]
 
 
 def generate_single(story_brief: dict[str, Any]) -> dict[str, Any]:
@@ -50,7 +120,8 @@ def generate_single(story_brief: dict[str, Any]) -> dict[str, Any]:
     system = f"{voice}\n\n---\n\n# Format instructions\n\n{fmt}"
     user = f"Story brief (JSON):\n```json\n{json.dumps(story_brief, indent=2, default=str)}\n```\n\nWrite the post."
     body = llm.complete(system=system, user=user, max_tokens=600, temperature=0.7).strip()
-    flags = check_ai_tells(body)
+    source_handles = story_brief.get("source_handles", []) or []
+    flags = check_ai_tells(body) + check_source_attribution(body, source_handles)
     return {
         "format": "single",
         "body": body,
@@ -74,10 +145,15 @@ def generate_thread(story_brief: dict[str, Any]) -> dict[str, Any]:
             raw = raw.rsplit("```", 1)[0]
         raw = raw.removeprefix("json\n").strip()
     tweets = json.loads(raw)
+    source_handles = story_brief.get("source_handles", []) or []
     flags: list[str] = []
     for i, t in enumerate(tweets):
         for f in check_ai_tells(t):
             flags.append(f"tweet{i}:{f}")
+    # Source attribution is required ANYWHERE in the thread, not per-tweet
+    full_thread = " ".join(tweets)
+    for f in check_source_attribution(full_thread, source_handles):
+        flags.append(f"thread:{f}")
     return {
         "format": "thread",
         "body": "\n\n".join(tweets),
@@ -88,11 +164,12 @@ def generate_thread(story_brief: dict[str, Any]) -> dict[str, Any]:
 
 
 def generate_for_story(story_brief: dict[str, Any]) -> list[dict[str, Any]]:
-    """Generate all recommended formats for a story."""
+    """Generate all recommended formats for a story. Regenerates up to 3 times
+    per format if AI-tell flags fire on the first attempt."""
     out: list[dict[str, Any]] = []
     formats = story_brief.get("format_recommendation", ["single"])
     if "single" in formats:
-        out.append(generate_single(story_brief))
+        out.append(regenerate_until_clean(generate_single, story_brief))
     if "thread" in formats:
-        out.append(generate_thread(story_brief))
+        out.append(regenerate_until_clean(generate_thread, story_brief))
     return out

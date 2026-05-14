@@ -13,24 +13,52 @@ from typing import Any
 from .. import config, db
 
 
+# Maps signal source identifiers to the X handle that should be credited in posts.
+# If a source isn't here, posts won't carry a data-source attribution.
+SOURCE_HANDLES: dict[str, str] = {
+    "defillama": "@DefiLlama",
+    "rwa_xyz": "@rwa_xyz",
+    "telegram_newswire": "@RWAxyzNewswire",
+    "vaultsfyi": "@vaultsfyi",
+    "bubblemaps": "@bubblemaps",
+    "etherscan": "@etherscan",
+    # Onchain RPC data (Alchemy) doesn't get a source tag because the chain itself
+    # is the source of truth, not the RPC provider. Leave blank.
+    "alchemy": "",
+    "x_firehose": "",  # the OP gets tagged in the reply itself, not as a source
+}
+
+
+def source_handle_for(source: str) -> str | None:
+    """Return the X handle for a signal source, or None if no attribution needed."""
+    handle = SOURCE_HANDLES.get(source, "")
+    return handle if handle else None
+
+
 def signal_to_story_brief(signal: dict[str, Any]) -> dict[str, Any]:
     """Turn one scored signal into a story brief object the drafter consumes."""
     payload = signal["payload"] if isinstance(signal["payload"], dict) else json.loads(signal["payload"])
     name = payload.get("name") or signal.get("entity") or "Unknown"
     twitter = payload.get("twitter")
-    handle = f"@{twitter}" if twitter else None
+    subject_handle = f"@{twitter}" if twitter else None
+    source = signal.get("source", "")
+    source_handle = source_handle_for(source)
+
+    # Map data-point sources from raw identifiers to X handles
+    def _data_source_label(src: str) -> str:
+        return source_handle_for(src) or src
 
     key_points: list[dict[str, Any]] = []
     if "tvl_usd" in payload:
-        key_points.append({"label": "TVL", "value": f"${payload['tvl_usd']:,.0f}", "source": "defillama"})
+        key_points.append({"label": "TVL", "value": f"${payload['tvl_usd']:,.0f}", "source": _data_source_label(source)})
     if "change_1d_pct" in payload:
-        key_points.append({"label": "24h change", "value": f"{payload['change_1d_pct']:+.2f}%", "source": "defillama"})
+        key_points.append({"label": "24h change", "value": f"{payload['change_1d_pct']:+.2f}%", "source": _data_source_label(source)})
     if "change_7d_pct" in payload and payload["change_7d_pct"] is not None:
-        key_points.append({"label": "7d change", "value": f"{payload['change_7d_pct']:+.2f}%", "source": "defillama"})
+        key_points.append({"label": "7d change", "value": f"{payload['change_7d_pct']:+.2f}%", "source": _data_source_label(source)})
     if payload.get("category"):
-        key_points.append({"label": "Category", "value": payload["category"], "source": "defillama"})
+        key_points.append({"label": "Category", "value": payload["category"], "source": _data_source_label(source)})
     if payload.get("chain"):
-        key_points.append({"label": "Chain", "value": payload["chain"], "source": "defillama"})
+        key_points.append({"label": "Chain", "value": payload["chain"], "source": _data_source_label(source)})
 
     th = config.thresholds()
     score = signal.get("materiality_score") or 0
@@ -38,10 +66,22 @@ def signal_to_story_brief(signal: dict[str, Any]) -> dict[str, Any]:
     if score >= th["materiality"]["minimum_for_thread"]:
         formats.append("thread")
 
+    # `entities` = handles the post is ABOUT (subject of analysis).
+    # `source_handles` = handles the post must CREDIT for data attribution.
+    # Both go through the same tagging logic in the prompt, but separated here for clarity.
+    entities: list[str] = []
+    if subject_handle:
+        entities.append(subject_handle)
+
+    source_handles: list[str] = []
+    if source_handle:
+        source_handles.append(source_handle)
+
     return {
         "headline": f"{name}: 24h TVL move {payload.get('change_1d_pct', 0):+.2f}%",
         "narrative_angle": "tvl shift in an RWA protocol; assess size and direction",
-        "entities": [handle] if handle else [],
+        "entities": entities,
+        "source_handles": source_handles,
         "key_data_points": key_points,
         "format_recommendation": formats,
         "graphic_spec": None,

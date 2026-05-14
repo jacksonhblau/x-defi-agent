@@ -19,6 +19,7 @@ Rules:
 - Each tweet is one paragraph. No multi-paragraph tweets.
 - Tag every entity with an X handle.
 - No hashtags.
+- The thread MUST include at least one handle from `source_handles` to credit the data source. Put it in tweet 1 or any other single tweet, never repeated across multiple tweets. Work it into prose naturally; no parenthetical citations.
 - Vary sentence length within and across tweets.
 
 Output as a JSON array of strings, one per tweet, in order. No commentary, no markdown.

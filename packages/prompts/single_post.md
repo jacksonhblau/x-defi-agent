@@ -21,5 +21,6 @@ Rules:
 - Blank lines between sections are intentional. Do not collapse them.
 - No hashtags.
 - Tag every entity with an X handle.
+- The post MUST include at least one handle from `source_handles` to credit the data source. Work it into a sentence naturally. No parenthetical citations.
 
 Output the final tweet text only. No commentary, no quotes around it, no markdown.

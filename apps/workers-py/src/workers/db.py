@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 from contextlib import contextmanager
@@ -16,6 +17,24 @@ from . import config
 
 
 _pool: ConnectionPool | None = None
+
+
+def _close_pool_on_exit() -> None:
+    """Close the pool before Python finalization so the worker thread can join cleanly.
+
+    Without this, Python 3.14 raises a noisy PythonFinalizationError from
+    psycopg_pool's __del__ during interpreter shutdown.
+    """
+    global _pool
+    if _pool is not None:
+        try:
+            _pool.close(timeout=2.0)
+        except Exception:
+            pass
+        _pool = None
+
+
+atexit.register(_close_pool_on_exit)
 
 
 def pool() -> ConnectionPool:

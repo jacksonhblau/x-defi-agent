@@ -157,3 +157,43 @@ create table if not exists exemplars (
 );
 
 create index if not exists exemplars_active_kind_idx on exemplars (kind, active);
+
+-- =============================================================================
+-- run_jobs
+-- One row per agent script/command. Edited by the user via the Excel dashboard.
+-- The 'agent watch' loop reads this table to decide what to run when.
+-- =============================================================================
+
+create table if not exists run_jobs (
+  id              uuid primary key default uuid_generate_v4(),
+  name            text not null unique,             -- 'ingest_defillama', 'score', etc.
+  description     text,
+  command         text not null,                    -- CLI command to invoke
+  cron            text,                             -- cron expression (UTC). null = manual-only.
+  enabled         boolean not null default true,
+  last_run_at     timestamptz,
+  next_run_at     timestamptz,
+  last_status     text,                             -- 'ok', 'error', 'running'
+  last_error      text,
+  run_now         boolean not null default false,   -- user-triggered ad-hoc run flag
+  sort_order      integer not null default 100
+);
+
+create index if not exists run_jobs_next_run_idx on run_jobs (next_run_at) where enabled;
+
+-- Seed default jobs if the table is empty.
+insert into run_jobs (name, description, command, cron, sort_order) values
+  ('ingest_defillama',  'Pull RWA-tagged protocols from DeFiLlama; emit TVL-delta signals',  'ingest --source defillama',  '*/10 * * * *', 10),
+  ('ingest_rwa_xyz',    'Pull tokenized treasury / credit data from RWA.xyz API',             'ingest --source rwa_xyz',    '*/15 * * * *', 11),
+  ('ingest_telegram',   'Stream messages from RWAxyzNewswire Telegram channel',               'ingest --source telegram',   '*/2 * * * *',  12),
+  ('ingest_x_firehose', 'Poll watchlist X accounts for new posts',                            'ingest --source x_firehose', '*/2 * * * *',  13),
+  ('ingest_alchemy',    'Watch onchain wallets and contract deploys',                         'ingest --source alchemy',    '*/5 * * * *',  14),
+  ('score',             'Run materiality scorer over unprocessed signals',                    'score',                      '*/5 * * * *',  20),
+  ('build_stories',     'Promote scored signals to stories',                                  'build-stories',              '*/10 * * * *', 30),
+  ('draft',             'Generate drafts for open stories (all formats)',                     'draft --all-open',           '*/15 * * * *', 40),
+  ('hot_take',          'Slow-day fallback: generate one non-obvious take per day',           'hot-take',                   '0 15 * * *',   50),
+  ('weekly_recap',      'Friday digest: top RWA flows and movers this week',                  'recap --weekly',             '0 13 * * 5',   51),
+  ('post_due',          'Drain scheduled_posts queue: publish anything past its post_at',     'post-due',                   '* * * * *',    60),
+  ('engagement_24h',    'Capture impressions/likes/RTs at +24h on each post',                 'engagement --window 24h',    '*/30 * * * *', 70),
+  ('engagement_7d',     'Capture impressions/likes/RTs at +7d on each post',                  'engagement --window 7d',     '0 */6 * * *',  71)
+on conflict (name) do nothing;
