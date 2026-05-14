@@ -273,6 +273,70 @@ def write_posts(wb: Workbook) -> None:
     _autosize(ws, POSTS_COLUMNS, maxw=80)
 
 
+CALENDAR_COLUMNS = [
+    "post_at_local",
+    "day",
+    "time",
+    "format",
+    "headline",
+    "body_preview",
+    "status",
+    "draft_id",
+]
+
+
+def write_calendar(wb: Workbook) -> None:
+    """Chronological list of all scheduled posts: queued, posting, and recently posted.
+
+    Times are shown in your local timezone (ET) for readability.
+    Read-only sheet.
+    """
+    from zoneinfo import ZoneInfo
+    et = ZoneInfo("America/New_York")
+
+    ws = wb.create_sheet("Calendar")
+    rows = _fetch_all(
+        """
+        select sp.post_at,
+               sp.status as sp_status,
+               d.id::text as draft_id,
+               d.format,
+               left(coalesce(d.edited_body, d.body), 120) as body_preview,
+               s.headline
+        from scheduled_posts sp
+        join drafts d on d.id = sp.draft_id
+        join stories s on s.id = d.story_id
+        where sp.status in ('queued', 'posting', 'posted')
+          and sp.post_at >= now() - interval '7 days'
+        order by sp.post_at asc
+        limit 200
+        """
+    )
+
+    formatted: list[dict[str, Any]] = []
+    for r in rows:
+        post_at_utc = r["post_at"]
+        if post_at_utc.tzinfo is None:
+            post_at_utc = post_at_utc.replace(tzinfo=timezone.utc)
+        post_at_et = post_at_utc.astimezone(et)
+        formatted.append({
+            "post_at_local": post_at_et.strftime("%Y-%m-%d %H:%M ET"),
+            "day": post_at_et.strftime("%A"),
+            "time": post_at_et.strftime("%-I:%M %p"),
+            "format": r["format"],
+            "headline": r["headline"],
+            "body_preview": r["body_preview"],
+            "status": r["sp_status"],
+            "draft_id": r["draft_id"],
+        })
+
+    _style_header(ws, CALENDAR_COLUMNS)
+    for r_idx, row in enumerate(formatted, start=2):
+        _write_row(ws, r_idx, CALENDAR_COLUMNS, row)
+    _style_rows(ws, CALENDAR_COLUMNS, len(formatted), set())  # all read-only
+    _autosize(ws, CALENDAR_COLUMNS, maxw=90)
+
+
 CONFIG_COLUMNS = ["key", "value", "description"]
 
 # Keys exposed to the user via the Config sheet, with descriptions.
@@ -341,13 +405,24 @@ def write_readme_sheet(wb: Workbook) -> None:
         "Updated by `agent watch` (runs on the user's Mac). Changes you make here apply on the next cycle.",
         "",
         "Sheet guide:",
-        "  Drafts     — pending posts. Edit `status` to 'approved' / 'rejected'. Edit `scheduled_for` to schedule.",
+        "  Drafts     — pending posts. Edit `status` to 'approved' / 'rejected'.",
+        "               Leave `scheduled_for` BLANK to auto-schedule at the next high-virality slot.",
+        "               Set `scheduled_for` only if you want a specific time (local ET, e.g. '2026-05-15 09:30').",
+        "  Calendar   — read-only. Every scheduled + posted item in chronological order with local ET times.",
         "  Run Jobs   — toggle `enabled`, change `cron`, or set `run_now` = YES to trigger an ad-hoc run.",
         "  Stories    — story-level state (read-only).",
         "  Signals    — recent signal log (read-only).",
         "  Posts      — published tweets + engagement metrics (read-only).",
         "  Config     — editable thresholds. Save and the watch loop will pick them up.",
         "  Watchlist  — monitored X accounts. Toggle `enabled` to skip an account.",
+        "",
+        "Auto-scheduling windows (when `scheduled_for` is blank):",
+        "  9-10am ET    — US wake-up + market open",
+        "  12-1pm ET    — lunch scroll",
+        "  5-6pm ET     — commute home",
+        "  8-9pm ET     — evening, catches Asia early",
+        "  Min gap between posts: 75 minutes",
+        "  Daily cap: 8 weekdays / 4 weekend",
         "",
         "Color key: yellow cells are editable, gray cells are read-only (your edits there are ignored).",
         "",
@@ -388,6 +463,7 @@ def export_to_excel(path: Path | None = None) -> Path:
 
     write_readme_sheet(wb)
     write_drafts(wb)
+    write_calendar(wb)
     write_run_jobs(wb)
     write_stories(wb)
     write_signals(wb)
@@ -429,14 +505,27 @@ def _coerce_bool(v: Any) -> bool | None:
 
 
 def _coerce_ts(v: Any) -> datetime | None:
+    """Parse a value into a tz-aware datetime in UTC.
+
+    Naive datetimes (no tzinfo) are interpreted as the operator's LOCAL time,
+    not UTC. This matches user intuition when they type '2026-05-15 09:00' in
+    Excel — they mean 9am in their own timezone, not 9am UTC.
+
+    Tz-aware datetimes are converted to UTC as-is.
+    """
     if v is None or v == "":
         return None
     if isinstance(v, datetime):
-        return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+        if v.tzinfo is None:
+            return v.astimezone(timezone.utc)   # naive → assumed local → UTC
+        return v.astimezone(timezone.utc)
     try:
-        return datetime.fromisoformat(str(v))
+        parsed = datetime.fromisoformat(str(v))
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def apply_from_excel(path: Path | None = None) -> dict[str, int]:
@@ -469,9 +558,14 @@ def apply_from_excel(path: Path | None = None) -> dict[str, int]:
 
         with db.conn() as c, c.cursor() as cur:
             cur.execute(
-                "select status, edited_body, scheduled_post_id is not null as scheduled "
-                "from drafts d left join scheduled_posts sp on sp.draft_id = d.id "
-                "where d.id = %s::uuid",
+                """
+                select d.status, d.edited_body,
+                       (sp.id is not null) as scheduled
+                from drafts d
+                left join scheduled_posts sp
+                  on sp.draft_id = d.id and sp.status in ('queued','posting')
+                where d.id = %s::uuid
+                """,
                 (draft_id,),
             )
             existing = cur.fetchone()
@@ -504,9 +598,17 @@ def apply_from_excel(path: Path | None = None) -> dict[str, int]:
                 cur.execute(f"update drafts set {', '.join(sets)} where id = %s::uuid", params)
                 drafts_updated += 1
 
-            # If approved, queue it (if not already queued)
+            # If approved, queue it (if not already queued).
+            # When the user leaves scheduled_for blank, auto-pick the next high-
+            # virality slot via scheduler.next_optimal_slot, respecting the daily
+            # cap and minimum gap against existing queued posts.
             if new_status == "approved":
-                post_at = new_scheduled or datetime.now(timezone.utc)
+                if new_scheduled:
+                    post_at = new_scheduled
+                else:
+                    from .. import scheduler
+                    existing = scheduler.fetch_existing_scheduled()
+                    post_at = scheduler.next_optimal_slot(existing_utc=existing)
                 cur.execute(
                     """
                     insert into scheduled_posts (draft_id, post_at)

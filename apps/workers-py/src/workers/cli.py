@@ -12,7 +12,7 @@ import typer
 from rich import print as rprint
 
 from . import config
-from .ingest import defillama
+from .ingest import defillama, rwa_xyz, telegram_newswire
 from .scoring import materiality
 from .stories import builder
 from .drafts import generator
@@ -22,29 +22,49 @@ app = typer.Typer(no_args_is_help=True, help="x-defi-agent CLI")
 
 @app.command()
 def migrate() -> None:
-    """Apply the Postgres schema (idempotent)."""
+    """Apply the Postgres schema and seed default run_jobs (idempotent)."""
     from . import db
     schema_path = config.PROJECT_ROOT / "packages" / "db" / "schema.sql"
     rprint(f"[bold]Applying schema from {schema_path}[/bold]")
     db.apply_schema_file(str(schema_path))
     rprint("[green]Schema applied[/green]")
+    inserted = db.seed_default_run_jobs()
+    rprint(f"[green]Seeded run_jobs: {inserted} new, {len(db.DEFAULT_RUN_JOBS) - inserted} already present[/green]")
 
 
 @app.command()
 def ingest(
-    source: str = typer.Option("defillama", help="Which source to poll"),
+    source: str = typer.Option("defillama", help="Which source to poll: defillama | rwa_xyz | telegram"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print signals instead of writing to DB"),
 ) -> None:
     """Run one ingest cycle for the given source."""
     if source == "defillama":
         signals = defillama.ingest_protocol_tvl_deltas(write_to_db=not dry_run)
         rprint(f"[bold]DeFiLlama: {len(signals)} RWA TVL-delta signals[/bold]")
-        for s in signals[:5]:
-            rprint(s)
-        if len(signals) > 5:
-            rprint(f"[dim]...and {len(signals) - 5} more[/dim]")
+    elif source == "rwa_xyz":
+        signals = rwa_xyz.ingest_top_assets(write_to_db=not dry_run)
+        rprint(f"[bold]RWA.xyz: {len(signals)} signals (new deploys + AUM deltas)[/bold]")
+    elif source == "telegram":
+        signals = telegram_newswire.fetch_recent_messages(limit=30, write_to_db=not dry_run)
+        rprint(f"[bold]Telegram: {len(signals)} newsfeed signals[/bold]")
     else:
         raise typer.BadParameter(f"Unknown source: {source}")
+
+    for s in signals[:5]:
+        rprint(s)
+    if len(signals) > 5:
+        rprint(f"[dim]...and {len(signals) - 5} more[/dim]")
+
+
+@app.command(name="telegram-login")
+def telegram_login() -> None:
+    """One-time interactive login for the Telegram client.
+
+    Run this once before the watch loop tries to fetch messages. It prompts for
+    the SMS code Telegram sends to your phone, then writes a session file to
+    data/telegram.session for non-interactive use.
+    """
+    telegram_newswire.interactive_login()
 
 
 @app.command()
@@ -66,9 +86,19 @@ def build_stories(limit: int = typer.Option(20)) -> None:
 @app.command()
 def draft(
     story_id: str = typer.Option(None, help="Specific story id to draft. If omitted, drafts the most recent open story."),
+    all_open: bool = typer.Option(False, "--all-open", help="Draft every open story instead of just the most recent one."),
 ) -> None:
-    """Generate drafts for a story. Writes results to data/drafts/<story_id>.json."""
+    """Generate drafts for one or more stories.
+
+    Drafts are persisted to the `drafts` table (status='pending') for the Excel
+    dashboard to surface. A copy is also written to data/drafts/<story_id>.json
+    for local inspection.
+    """
     from . import db
+    if all_open:
+        counts = generator.draft_all_open()
+        rprint(f"[green]Drafted {counts['drafts']} drafts across {counts['stories']} stories[/green]")
+        return
     if story_id is None:
         with db.conn() as c:
             from psycopg.rows import dict_row
@@ -111,13 +141,14 @@ def draft(
 
     rprint(f"[bold]Drafting for story: {brief['headline']}[/bold]")
     drafts = generator.generate_for_story(brief)
+    ids = generator.save_drafts_to_db(story_id, drafts)
 
     out_dir = config.PROJECT_ROOT / "data" / "drafts"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{story_id}.json"
     with out_path.open("w") as f:
-        json.dump({"story": brief, "drafts": drafts}, f, indent=2, default=str)
-    rprint(f"[green]Wrote {out_path}[/green]")
+        json.dump({"story": brief, "drafts": drafts, "saved_ids": ids}, f, indent=2, default=str)
+    rprint(f"[green]Wrote {out_path} and saved {len(ids)} drafts to DB[/green]")
     for d in drafts:
         rprint(f"\n[bold cyan]--- {d['format']} ---[/bold cyan]")
         rprint(d["body"])
@@ -150,12 +181,13 @@ def test_e2e(source: str = typer.Option("defillama")) -> None:
     rprint("[bold]Step 4/4: Draft (top story)[/bold]")
     top = stories[0]
     drafts = generator.generate_for_story(top)
+    ids = generator.save_drafts_to_db(top["id"], drafts)
     out_dir = config.PROJECT_ROOT / "data" / "drafts"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{top['id']}.json"
     with out_path.open("w") as f:
-        json.dump({"story": top, "drafts": drafts}, f, indent=2, default=str)
-    rprint(f"\n[green]End-to-end complete. Output: {out_path}[/green]\n")
+        json.dump({"story": top, "drafts": drafts, "saved_ids": ids}, f, indent=2, default=str)
+    rprint(f"\n[green]End-to-end complete. Output: {out_path} ({len(ids)} drafts saved to DB)[/green]\n")
     for d in drafts:
         rprint(f"[bold cyan]--- {d['format']} ---[/bold cyan]")
         rprint(d["body"])
@@ -170,6 +202,78 @@ def post_due() -> None:
     from . import poster
     result = poster.drain_due()
     rprint(f"[green]Posted {result['posted']}, failed {result['failed']}, skipped {result['skipped']}[/green]")
+
+
+@app.command(name="schedule-status")
+def schedule_status() -> None:
+    """Print the current posting schedule in local ET time. No Excel needed."""
+    from . import db
+    from zoneinfo import ZoneInfo
+    et = ZoneInfo("America/New_York")
+    with db.conn() as c, c.cursor() as cur:
+        cur.execute("select status, count(*) from drafts group by status order by status")
+        drafts_summary = cur.fetchall()
+        cur.execute("select status, count(*) from scheduled_posts group by status order by status")
+        sp_summary = cur.fetchall()
+        cur.execute(
+            "select sp.post_at, sp.status, left(d.body, 80) "
+            "from scheduled_posts sp join drafts d on d.id = sp.draft_id "
+            "where sp.status in ('queued', 'posting') "
+            "order by sp.post_at asc limit 30"
+        )
+        upcoming = cur.fetchall()
+    rprint("[bold]DRAFTS by status:[/bold]")
+    for s, n in drafts_summary:
+        rprint(f"  {s}: {n}")
+    rprint("\n[bold]SCHEDULED_POSTS by status:[/bold]")
+    for s, n in sp_summary:
+        rprint(f"  {s}: {n}")
+    rprint(f"\n[bold]UPCOMING ({len(upcoming)} queued/posting, sorted):[/bold]")
+    for post_at, st, body in upcoming:
+        if post_at.tzinfo is None:
+            from datetime import timezone as tz_
+            post_at = post_at.replace(tzinfo=tz_.utc)
+        local = post_at.astimezone(et).strftime("%a %Y-%m-%d %I:%M %p ET")
+        rprint(f"  {local}  [{st}]  {body}")
+
+
+@app.command(name="reschedule-imminent")
+def reschedule_imminent() -> None:
+    """One-shot: re-time any queued post whose post_at is now-or-past into
+    the next high-virality slots, respecting min-gap and daily cap.
+
+    Use this after approving a batch of drafts with the old (immediate-fire)
+    scheduling, to spread them across upcoming optimal windows instead.
+    """
+    from . import db, scheduler
+
+    with db.conn() as c, c.cursor() as cur:
+        cur.execute(
+            "select id::text from scheduled_posts "
+            "where status = 'queued' and post_at < now() + interval '5 minutes' "
+            "order by post_at asc"
+        )
+        ids = [row[0] for row in cur.fetchall()]
+
+    if not ids:
+        rprint("[yellow]No immediate-fire posts found. Nothing to reschedule.[/yellow]")
+        return
+
+    rprint(f"[bold]Rescheduling {len(ids)} immediate-fire posts into future optimal slots...[/bold]")
+    already_scheduled: list = []
+    for sp_id in ids:
+        slot = scheduler.next_optimal_slot(existing_utc=already_scheduled)
+        with db.conn() as c, c.cursor() as cur:
+            cur.execute(
+                "update scheduled_posts set post_at = %s where id = %s::uuid",
+                (slot, sp_id),
+            )
+            c.commit()
+        already_scheduled.append(slot)
+        local = slot.astimezone(scheduler.ET).strftime("%a %Y-%m-%d %I:%M %p ET")
+        rprint(f"  → {local}")
+
+    rprint(f"\n[green]Done. {len(ids)} posts now spread across optimal windows.[/green]")
 
 
 @app.command(name="excel-export")

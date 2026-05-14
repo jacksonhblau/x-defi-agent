@@ -1,6 +1,7 @@
-"""Scheduler — evaluates run_jobs.cron and decides what to run when.
+"""Scheduler — evaluates run_jobs.cron AND picks high-virality slots for posts.
 
-Used by the `agent watch` loop.
+Used by the `agent watch` loop (job firing) and by dashboard.apply_from_excel
+(post slot picking when the user approves a draft with no specific time).
 """
 
 from __future__ import annotations
@@ -8,13 +9,127 @@ from __future__ import annotations
 import shlex
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from croniter import croniter
 from psycopg.rows import dict_row
 
 from . import db
+
+
+# =============================================================================
+# Auto-scheduling: pick high-virality posting slots
+# =============================================================================
+
+ET = ZoneInfo("America/New_York")
+
+# Preferred posting windows in LOCAL ET, ordered by historical engagement for
+# finance/crypto content. Each is (start_hour, end_hour), half-open.
+PREFERRED_WINDOWS_ET: list[tuple[int, int]] = [
+    (9, 10),    # 9-10am ET — US wake-up + market open
+    (12, 13),   # 12-1pm ET — lunch scroll
+    (17, 18),   # 5-6pm ET — commute home
+    (20, 21),   # 8-9pm ET — evening, catches Asia early
+]
+
+MIN_GAP_MINUTES = 75            # min minutes between any two posts
+DAILY_CAP_WEEKDAY = 8           # max posts on Mon-Fri (ET)
+DAILY_CAP_WEEKEND = 4           # max posts on Sat-Sun
+
+
+def _in_preferred_window(dt_et: datetime) -> bool:
+    return any(start <= dt_et.hour < end for (start, end) in PREFERRED_WINDOWS_ET)
+
+
+def _daily_cap_for(dt_et: datetime) -> int:
+    return DAILY_CAP_WEEKEND if dt_et.weekday() >= 5 else DAILY_CAP_WEEKDAY
+
+
+def next_optimal_slot(
+    *,
+    now_utc: datetime | None = None,
+    existing_utc: list[datetime] | None = None,
+    max_lookahead_days: int = 7,
+) -> datetime:
+    """Find the next high-virality posting slot in UTC.
+
+    Constraints applied in order:
+      1. Must land inside a PREFERRED_WINDOWS_ET window (ET-localized hour).
+      2. Must be at least MIN_GAP_MINUTES from any time in existing_utc.
+      3. Must not push the ET-day's count past the daily cap (weekday/weekend aware).
+      4. Must be at least 15 minutes in the future.
+
+    The search proceeds in 15-minute increments. If nothing fits within the
+    lookahead window (very unusual), falls back to "first preferred slot
+    tomorrow morning" so we never block forever.
+    """
+    now_utc = now_utc or datetime.now(timezone.utc)
+    existing_utc = existing_utc or []
+    # Normalize to UTC-aware
+    existing_utc = [
+        (t if t.tzinfo else t.replace(tzinfo=timezone.utc)) for t in existing_utc
+    ]
+
+    # Snap candidate to the next quarter-hour at least 15 min in the future
+    candidate = now_utc + timedelta(minutes=15)
+    candidate = candidate.replace(second=0, microsecond=0)
+    minute_floor = (candidate.minute // 15) * 15
+    candidate = candidate.replace(minute=minute_floor)
+
+    steps = max_lookahead_days * 24 * 4   # 15-minute slots
+    for _ in range(steps):
+        candidate_et = candidate.astimezone(ET)
+
+        if not _in_preferred_window(candidate_et):
+            candidate += timedelta(minutes=15)
+            continue
+
+        # Min gap check against all existing scheduled times
+        too_close = any(
+            abs((candidate - t).total_seconds()) < MIN_GAP_MINUTES * 60
+            for t in existing_utc
+        )
+        if too_close:
+            candidate += timedelta(minutes=15)
+            continue
+
+        # Daily cap check (by ET calendar day)
+        candidate_day = candidate_et.date()
+        same_day_count = sum(
+            1 for t in existing_utc if t.astimezone(ET).date() == candidate_day
+        )
+        if same_day_count >= _daily_cap_for(candidate_et):
+            # Skip to start of next ET day (12:01am ET → next preferred window)
+            next_day_et = (candidate_et + timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            candidate = next_day_et.astimezone(timezone.utc)
+            continue
+
+        return candidate
+
+    # Fallback: tomorrow 9am ET
+    tomorrow_et = (now_utc.astimezone(ET) + timedelta(days=1)).replace(
+        hour=9, minute=0, second=0, microsecond=0
+    )
+    return tomorrow_et.astimezone(timezone.utc)
+
+
+def fetch_existing_scheduled() -> list[datetime]:
+    """Return all currently-queued or posting times. Used to constrain new picks."""
+    with db.conn() as c, c.cursor() as cur:
+        cur.execute(
+            "select post_at from scheduled_posts where status in ('queued', 'posting')"
+        )
+        return [row[0] for row in cur.fetchall()]
+
+
+# =============================================================================
+# Job scheduling: cron-based run_jobs evaluation (existing behavior)
+# =============================================================================
+
 
 
 def _now_utc() -> datetime:
