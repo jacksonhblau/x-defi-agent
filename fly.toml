@@ -1,0 +1,26 @@
+# Fly.io configuration — DO NOT add secrets here.
+# Use `fly secrets set X_API_KEY=... ANTHROPIC_API_KEY=...` instead.
+#
+# This file is a stub. Replace `app = "..."` with your actual Fly app name
+# after running `fly launch --no-deploy` from the apps/workers-py directory.
+
+app = "x-defi-agent-workers"
+primary_region = "iad"
+
+[build]
+  dockerfile = "apps/workers-py/Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  LOG_LEVEL = "info"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[processes]
+  ingest = "python -m workers.cli ingest --loop"
+  drafter = "python -m workers.cli draft --loop"
+
+[deploy]
+  release_command = "python -m workers.cli migrate"

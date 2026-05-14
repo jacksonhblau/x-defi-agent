@@ -1,0 +1,58 @@
+# Local helper script (delete after use)
+PUSH_TO_GITHUB.sh
+
+# Secrets - NEVER commit these
+.env
+.env.bak
+.env.local
+.env.*.local
+*.bak
+*.session
+data/telegram.session*
+
+# Mac Finder duplicates
+* copy
+* copy 2
+* copy.*
+.env.example copy
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+build/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local data
+data/
+*.sqlite
+*.db
+
+# Playwright
+playwright-report/
+test-results/
+
+# Fly
+fly.toml.local
