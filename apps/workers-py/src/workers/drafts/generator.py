@@ -215,8 +215,19 @@ def generate_for_story(story_brief: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def save_drafts_to_db(story_id: str, drafts: list[dict[str, Any]]) -> list[str]:
-    """Insert generated drafts into the drafts table. Returns inserted ids."""
+def save_drafts_to_db(
+    story_id: str,
+    drafts: list[dict[str, Any]],
+    brief: dict[str, Any] | None = None,
+) -> list[str]:
+    """Insert generated drafts into the drafts table. Returns inserted ids.
+
+    If `brief` is provided, also dispatches graphics for each draft (via the
+    algo-refit graphics module) and inserts a row into media_assets per asset.
+    The dispatcher routes data-led briefs (with key_data_points) to the
+    canvas-design Ledger Cartography renderer, which uploads to Supabase
+    Storage and returns a public URL.
+    """
     from .. import db
     ids: list[str] = []
     with db.conn() as c, c.cursor() as cur:
@@ -237,8 +248,54 @@ def save_drafts_to_db(story_id: str, drafts: list[dict[str, Any]]) -> list[str]:
                 ),
             )
             row = cur.fetchone()
-            if row:
-                ids.append(row[0])
+            if not row:
+                continue
+            draft_id = row[0]
+            ids.append(draft_id)
+
+            # Algo-refit: dispatch graphics for this draft and persist any
+            # produced media_assets rows. Failures here are non-fatal — the
+            # draft still saves; the media row just isn't created.
+            if brief is None:
+                continue
+            try:
+                from ..graphics import dispatch_for_draft
+                draft_for_dispatch = {"format": d["format"], "id": draft_id}
+                assets = dispatch_for_draft(draft_for_dispatch, brief)
+            except Exception as e:  # noqa: BLE001
+                print(f"[draft={draft_id}] graphics dispatch failed: {type(e).__name__}: {e}")
+                continue
+            for asset in assets or []:
+                try:
+                    cur.execute(
+                        """
+                        insert into media_assets
+                            (draft_id, kind, source, model, prompt,
+                             higgsfield_job_id, canva_template_slug, canva_design_id,
+                             storage_url, status, credits_used, ready_at)
+                        values
+                            (%s::uuid, %s, %s, %s, %s,
+                             %s, %s, %s,
+                             %s, %s, %s, %s)
+                        """,
+                        (
+                            draft_id,
+                            asset.get("kind", "image"),
+                            asset.get("source", "custom"),
+                            asset.get("model"),
+                            asset.get("prompt") or "",
+                            asset.get("higgsfield_job_id"),
+                            asset.get("canva_template_slug"),
+                            asset.get("canva_design_id"),
+                            asset.get("storage_url"),
+                            asset.get("status", "queued"),
+                            asset.get("credits_used"),
+                            asset.get("ready_at"),
+                        ),
+                    )
+                except Exception as e:  # noqa: BLE001
+                    print(f"[draft={draft_id}] media_assets insert failed: {type(e).__name__}: {e}")
+
         cur.execute(
             "update stories set status = 'drafted' where id = %s::uuid",
             (story_id,),
@@ -291,7 +348,7 @@ def draft_all_open(limit: int = 20, verbose: bool = True) -> dict[str, int]:
             print(f"  [{i}/{len(stories)}] {brief['headline'][:60]:60s} formats={formats}", flush=True)
         try:
             drafts = generate_for_story(brief)
-            ids = save_drafts_to_db(s["id"], drafts)
+            ids = save_drafts_to_db(s["id"], drafts, brief)
             n_drafts += len(ids)
             if verbose:
                 # Summarize the AI-check pass/fail per draft

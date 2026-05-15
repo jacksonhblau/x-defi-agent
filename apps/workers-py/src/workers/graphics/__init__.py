@@ -64,7 +64,13 @@ def dispatch_for_draft(
         status: 'queued' | 'running' | 'ready' | 'failed'
         storage_url: str (set when status == 'ready')
     """
-    kind = (brief or {}).get("graphic_kind", EDITORIAL_KIND)
+    kind = (brief or {}).get("graphic_kind")
+    if not kind:
+        # Smart default for v1 story builder which doesn't set graphic_kind:
+        # if the brief has key_data_points (named entities, real numbers), it's
+        # almost certainly a data-led post → render a Ledger Cartography plate.
+        # Falls back to editorial (Higgsfield) for hot-takes / pure-opinion posts.
+        kind = "deploy_card" if ((brief or {}).get("key_data_points") or []) else EDITORIAL_KIND
     fmt = (draft or {}).get("format", "single")
     materiality = int((brief or {}).get("materiality_score", 0) or 0)
 
