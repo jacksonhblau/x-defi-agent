@@ -614,7 +614,12 @@ def apply_from_excel(path: Path | None = None) -> dict[str, int]:
                     insert into scheduled_posts (draft_id, post_at)
                     select %s::uuid, %s
                     where not exists (
-                        select 1 from scheduled_posts where draft_id = %s::uuid and status in ('queued','posting')
+                        -- Dedup against ANY prior scheduled_post for this draft, not
+                        -- just queued/posting. A 'failed' row means we already tried
+                        -- and X rejected it; auto-resurrecting it just spams duplicate
+                        -- attempts every watch cycle. The reviewer must explicitly
+                        -- requeue via the dashboard's "Retry" action.
+                        select 1 from scheduled_posts where draft_id = %s::uuid
                     )
                     """,
                     (draft_id, post_at, draft_id),
