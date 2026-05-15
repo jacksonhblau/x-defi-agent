@@ -2,7 +2,7 @@
 
 import { useState, useTransition, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { CheckCircle, XCircle, AlertTriangle, Edit2, ChevronUp, ChevronDown, Search } from 'lucide-react'
+import { CheckCircle, XCircle, AlertTriangle, Edit2, ChevronUp, ChevronDown, Search, Image as ImageIcon, Video } from 'lucide-react'
 import { cn, truncate, relativeTime } from '@/lib/utils'
 import type { Draft, DraftFormat, DraftStatus } from '@/lib/types'
 import { StatusBadge } from '@/components/status-badge'
@@ -317,6 +317,8 @@ export function DraftsClient({ initialDrafts, counts }: DraftsClientProps) {
                   <th className="px-3 py-2 text-left font-medium text-muted w-56">Headline</th>
                   <th className="px-3 py-2 text-left font-medium text-muted">Body</th>
                   <th className="px-3 py-2 text-left font-medium text-muted w-16">AI</th>
+                  <th className="px-3 py-2 text-left font-medium text-muted w-16" title="Predicted X-algo score, 0-100. Threshold for ready_for_review is 60.">Score</th>
+                  <th className="px-3 py-2 text-left font-medium text-muted w-20" title="Media asset attached: Ledger Cartography (canvas_design), Higgsfield, or Canva.">Media</th>
                   <th className="px-3 py-2 text-left font-medium text-muted w-24">
                     <button onClick={() => toggleSort('status')} className="flex items-center gap-1 hover:text-foreground">
                       Status <SortIcon col="status" />
@@ -378,6 +380,79 @@ export function DraftsClient({ initialDrafts, counts }: DraftsClientProps) {
                       ) : (
                         <span className="text-muted">—</span>
                       )}
+                    </td>
+                    {/* Predicted algo score (algo-refit, May 2026). 60+ = ready_for_review threshold. */}
+                    <td className="px-3 tabular-nums">
+                      {typeof draft.predicted_algo_score === 'number' ? (
+                        <span
+                          title={`Predicted X-algo score: ${draft.predicted_algo_score}/100. Threshold for ready_for_review: 60.`}
+                          className={cn(
+                            'inline-flex items-center justify-center rounded h-5 px-1.5 text-[11px] font-semibold',
+                            draft.predicted_algo_score >= 80
+                              ? 'bg-success/15 text-success'
+                              : draft.predicted_algo_score >= 60
+                              ? 'bg-accent/15 text-accent'
+                              : 'bg-warning/15 text-warning'
+                          )}
+                        >
+                          {draft.predicted_algo_score}
+                        </span>
+                      ) : (
+                        <span className="text-muted">—</span>
+                      )}
+                    </td>
+                    {/* Media-attached: inline thumbnail when storage_url is a public HTTP URL,
+                        otherwise icon + source label. Click opens full-size in new tab. */}
+                    <td className="px-3">
+                      {(() => {
+                        const ready = (draft.media_assets ?? []).filter((m) => m.status === 'ready')
+                        if (ready.length === 0) {
+                          return <span className="text-muted text-[11px]">none</span>
+                        }
+                        const first = ready[0]
+                        const sourceLabel = first.source === 'canvas_design'
+                          ? 'Ledger'
+                          : first.source === 'higgsfield'
+                          ? 'Higgs'
+                          : first.source === 'canva'
+                          ? 'Canva'
+                          : 'Custom'
+                        const Icon = first.kind === 'video' ? Video : ImageIcon
+                        const isPublicUrl = typeof first.storage_url === 'string' &&
+                          (first.storage_url.startsWith('http://') || first.storage_url.startsWith('https://'))
+                        if (isPublicUrl && first.kind === 'image') {
+                          return (
+                            <a
+                              href={first.storage_url ?? '#'}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title={`${sourceLabel} · ${ready.length} ${ready.length === 1 ? 'asset' : 'assets'}\n${first.storage_url}`}
+                              className="inline-flex items-center gap-1.5 hover:opacity-80 transition-opacity"
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={first.storage_url ?? ''}
+                                alt={`${sourceLabel} plate`}
+                                className="w-7 h-7 rounded object-cover border border-border bg-surface"
+                                loading="lazy"
+                              />
+                              <span className="text-[11px] text-foreground/80">{sourceLabel}</span>
+                              {ready.length > 1 && <span className="text-muted text-[11px]">×{ready.length}</span>}
+                            </a>
+                          )
+                        }
+                        // Fallback: no public URL yet (local Fly path or bucket not wired).
+                        return (
+                          <span
+                            title={`${ready.length} ${ready.length === 1 ? 'asset' : 'assets'} attached (${first.source}${first.storage_url ? `\n${first.storage_url}` : ''})`}
+                            className="inline-flex items-center gap-1 text-[11px] text-foreground/80"
+                          >
+                            <Icon size={12} className="text-accent" />
+                            {sourceLabel}
+                            {ready.length > 1 && <span className="text-muted">×{ready.length}</span>}
+                          </span>
+                        )
+                      })()}
                     </td>
                     <td className="px-3">
                       <StatusBadge status={draft.status} />

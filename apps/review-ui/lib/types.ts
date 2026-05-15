@@ -4,6 +4,26 @@ export type StoryStatus = 'open' | 'drafted' | 'posted' | 'killed'
 export type ScheduledPostStatus = 'queued' | 'posting' | 'posted' | 'failed'
 export type JobStatus = 'ok' | 'error' | 'running'
 export type SignalSource = 'defillama' | 'rwa_xyz' | 'telegram_newswire' | 'alchemy' | 'x_firehose' | 'vaultsfyi' | 'bubblemaps'
+export type MediaAssetSource = 'higgsfield' | 'canvas_design' | 'canva' | 'custom'
+export type MediaAssetKind = 'image' | 'video'
+export type MediaAssetStatus = 'queued' | 'running' | 'ready' | 'failed'
+
+export interface MediaAsset {
+  id: string
+  draft_id: string
+  kind: MediaAssetKind
+  source: MediaAssetSource
+  status: MediaAssetStatus
+  storage_url: string | null
+  model: string | null
+  prompt: string | null
+  higgsfield_job_id: string | null
+  canva_template_slug: string | null
+  canva_design_id: string | null
+  credits_used: number | null
+  created_at: string
+  ready_at: string | null
+}
 
 export interface Story {
   id: string
@@ -37,8 +57,14 @@ export interface Draft {
   reviewer_notes: string | null
   reviewed_at: string | null
   edited_body: string | null
+  // Algo-refit (May 2026) — added by 0002_algo_refit.sql migration
+  first_person_check_passed: boolean | null
+  personal_facts_check_passed: boolean | null
+  predicted_algo_score: number | null
+  ready_for_review: boolean | null
   // joined
   stories?: Story
+  media_assets?: MediaAsset[]
 }
 
 export interface ScheduledPost {

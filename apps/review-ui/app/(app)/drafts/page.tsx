@@ -8,7 +8,9 @@ async function getDrafts(): Promise<{ drafts: Draft[]; counts: { pending: number
     const [draftsRes, pendingRes, approvedRes, postedRes] = await Promise.all([
       db
         .from('drafts')
-        .select('*, stories(id, headline, narrative_angle, entities, source_handles, key_data_points, format_recommendation, hot_take, status)')
+        .select(
+          '*, stories(id, headline, narrative_angle, entities, source_handles, key_data_points, format_recommendation, hot_take, status), media_assets(id, draft_id, kind, source, status, storage_url, model, canva_template_slug, canva_design_id, credits_used, created_at, ready_at)'
+        )
         .in('status', ['pending', 'approved', 'edited'])
         .order('created_at', { ascending: false })
         .limit(200),
