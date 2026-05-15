@@ -17,16 +17,24 @@ export default function LoginPage() {
     e.preventDefault()
     setError('')
     setLoading(true)
-    const res = await signIn('credentials', {
-      password,
-      redirect: false,
-    })
-    setLoading(false)
-    if (res?.ok) {
-      router.replace('/drafts')
-    } else {
-      setError('Incorrect password.')
-      setPassword('')
+    try {
+      const res = await signIn('credentials', {
+        password,
+        redirect: false,
+      })
+      if (res?.ok) {
+        router.replace('/drafts')
+      } else if (res?.error) {
+        setError(res.error === 'CredentialsSignin' ? 'Incorrect password.' : res.error)
+        setPassword('')
+      } else {
+        setError('Sign in failed. Check server configuration.')
+        setPassword('')
+      }
+    } catch (err) {
+      setError('Connection error. Please try again.')
+    } finally {
+      setLoading(false)
     }
   }
 

@@ -10,5 +10,10 @@
     "dev": "cd apps/review-ui && npm run dev",
     "build": "cd apps/review-ui && npm run build",
     "start": "cd apps/review-ui && npm run start"
+  },
+  "dependencies": {
+    "lucide-react": "^1.16.0",
+    "next-auth": "^4.24.14",
+    "react": "^19.2.6"
   }
 }
