@@ -141,7 +141,8 @@ def draft(
 
     rprint(f"[bold]Drafting for story: {brief['headline']}[/bold]")
     drafts = generator.generate_for_story(brief)
-    ids = generator.save_drafts_to_db(story_id, drafts)
+    # Pass brief through so graphics dispatcher runs and media_assets get inserted.
+    ids = generator.save_drafts_to_db(story_id, drafts, brief)
 
     out_dir = config.PROJECT_ROOT / "data" / "drafts"
     out_dir.mkdir(parents=True, exist_ok=True)

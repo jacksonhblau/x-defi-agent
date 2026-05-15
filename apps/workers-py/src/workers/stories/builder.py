@@ -413,6 +413,40 @@ def build_open_stories(limit: int = 20) -> list[dict[str, Any]]:
     for sig in signals:
         brief = signal_to_story_brief(sig)
         with db.conn() as c, c.cursor() as cur:
+            # ---- Dedup: link this signal to an existing recent story with the same
+            # headline rather than spawning a duplicate. Same news arriving from
+            # multiple sources (Telegram + DeFiLlama + RWA.xyz) used to triple our
+            # story count and triple our draft generation costs.
+            cur.execute(
+                """
+                select id::text, signals_ids
+                from stories
+                where headline = %s
+                  and status in ('open', 'drafted')
+                  and created_at > now() - interval '7 days'
+                order by created_at desc
+                limit 1
+                """,
+                (brief["headline"],),
+            )
+            existing = cur.fetchone()
+            if existing:
+                existing_id, existing_signal_ids = existing
+                # Avoid double-listing the same signal_id
+                if str(sig["id"]) not in [str(s) for s in (existing_signal_ids or [])]:
+                    cur.execute(
+                        "update stories set signals_ids = array_append(signals_ids, %s) where id = %s::uuid",
+                        (sig["id"], existing_id),
+                    )
+                cur.execute(
+                    "update signals set promoted_to_story_id = %s where id = %s",
+                    (existing_id, sig["id"]),
+                )
+                c.commit()
+                # Skip — we linked the signal to the existing story. Not added to
+                # `created` because it's not a new story.
+                continue
+
             cur.execute(
                 """
                 insert into stories (headline, narrative_angle, entities, source_handles,

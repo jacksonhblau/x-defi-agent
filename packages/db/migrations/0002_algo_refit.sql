@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS media_assets (
   draft_id      UUID NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
   kind          TEXT NOT NULL CHECK (kind IN ('image','video')),
   source        TEXT NOT NULL DEFAULT 'higgsfield'
-                  CHECK (source IN ('higgsfield','canva','custom')),
+                  CHECK (source IN ('higgsfield','canva','canvas_design','custom')),
   model         TEXT,
   prompt        TEXT,
   higgsfield_job_id   TEXT,

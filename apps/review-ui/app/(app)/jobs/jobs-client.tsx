@@ -2,14 +2,14 @@
 
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import { Play } from 'lucide-react'
+import { Play, Zap } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { RunJob } from '@/lib/types'
 import { StatusBadge } from '@/components/status-badge'
 import { RelativeTime } from '@/components/relative-time'
 import { Topbar } from '@/components/topbar'
 import { useToast } from '@/components/toast'
-import { updateJobCron, toggleJobEnabled, triggerRunNow } from '@/app/actions/jobs'
+import { updateJobCron, toggleJobEnabled, triggerRunNow, triggerFullRefresh } from '@/app/actions/jobs'
 
 // Infer category from job name
 function category(name: string): string {
@@ -75,10 +75,51 @@ export function JobsClient({ initialJobs }: JobsClientProps) {
     })
   }
 
+  async function handleFullRefresh() {
+    if (!window.confirm(
+      'Run the full news pipeline now?\n\n' +
+      'This queues all ingest sources + score + build_stories + draft to fire on the ' +
+      'next worker cycle (~60s). Total processing time is typically 2–5 minutes.'
+    )) return
+    startTransition(async () => {
+      try {
+        const r = await triggerFullRefresh()
+        toast(
+          `Pipeline queued: ${r.queued} jobs (${r.names.join(', ')}). ` +
+          `Watch the worker logs or come back in ~5 min.`,
+          'success'
+        )
+        router.refresh()
+      } catch (e) {
+        toast((e as Error).message, 'error')
+      }
+    })
+  }
+
   return (
     <>
       <Topbar title="Run Jobs" onRefresh={() => router.refresh()} isRefreshing={isPending} />
       <div className="flex-1 overflow-auto px-4 py-4 flex flex-col gap-6">
+        {/* One-click full pipeline trigger — fallback when cron didn't fire on schedule. */}
+        <div className="flex items-start justify-between gap-4 p-3 rounded border border-border bg-surface/40">
+          <div className="flex flex-col gap-1">
+            <h2 className="text-sm font-semibold text-foreground">Refresh news pipeline</h2>
+            <p className="text-xs text-muted leading-snug max-w-2xl">
+              Pull the latest signals from RWA.xyz, DeFiLlama, and Telegram, score them,
+              promote scored signals to stories, and draft every open story. Use this if
+              the daily cron didn&apos;t fire automatically. Takes 2–5 minutes once queued.
+            </p>
+          </div>
+          <button
+            onClick={handleFullRefresh}
+            disabled={isPending}
+            className="flex items-center gap-1.5 px-3 h-8 text-xs font-medium rounded bg-accent text-white hover:opacity-90 disabled:opacity-50 transition-opacity whitespace-nowrap"
+          >
+            <Zap size={13} />
+            Run pipeline now
+          </button>
+        </div>
+
         {Object.entries(grouped).map(([cat, jobs]) => (
           <div key={cat}>
             <h2 className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">{cat}</h2>
