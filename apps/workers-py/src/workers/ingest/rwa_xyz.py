@@ -85,10 +85,42 @@ def _latest_signal_for_entity(entity: str, source: str = "rwa_xyz") -> dict[str,
         return cur.fetchone()
 
 
-def _aum_change_pct(old: float, new: float) -> float | None:
-    if old is None or new is None or old == 0:
+def _coerce_to_float(val: Any) -> float | None:
+    """Best-effort numeric extraction.
+
+    RWA.xyz's API returns `circulating_market_value_dollar` either as a raw number
+    or as a nested dict like `{"value": 1234.5, "currency": "USD"}` (the shape
+    flipped sometime around May 2026). Old signals already stored in our DB may
+    be either shape too. This helper tolerates both, plus numeric strings.
+    Returns None when no numeric value is recoverable.
+    """
+    if val is None:
         return None
-    return (new - old) / old * 100.0
+    if isinstance(val, bool):  # bools are ints in Python; reject explicitly
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        try:
+            return float(val.replace(",", "").strip())
+        except ValueError:
+            return None
+    if isinstance(val, dict):
+        for key in ("value", "amount", "usd", "dollar", "raw", "current"):
+            if key in val:
+                return _coerce_to_float(val[key])
+        return None
+    return None
+
+
+def _aum_change_pct(old: Any, new: Any) -> float | None:
+    """Return % change from old to new. Coerces dict-shaped inputs (RWA.xyz API
+    change) to floats before computing."""
+    old_f = _coerce_to_float(old)
+    new_f = _coerce_to_float(new)
+    if old_f is None or new_f is None or old_f == 0:
+        return None
+    return (new_f - old_f) / old_f * 100.0
 
 
 def ingest_top_assets(
@@ -131,7 +163,12 @@ def ingest_top_assets(
                 continue
             entity = f"rwa_asset:{asset_id}"
             name = asset.get("name") or asset.get("asset_name") or f"asset_{asset_id}"
-            market_value = asset.get("circulating_market_value_dollar") or asset.get("market_value_dollar")
+            # RWA.xyz returns this as a dict (since ~May 2026) or a number depending
+            # on the asset class. Normalize to a float at ingest so stored payloads
+            # are consistent and downstream comparisons don't crash.
+            market_value = _coerce_to_float(
+                asset.get("circulating_market_value_dollar") or asset.get("market_value_dollar")
+            )
             manager = asset.get("manager_name") or asset.get("issuer_name")
 
             payload_common = {
