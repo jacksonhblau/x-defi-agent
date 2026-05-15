@@ -21,7 +21,9 @@ def _find_project_root(start: Path) -> Path:
 
 
 PROJECT_ROOT = _find_project_root(Path(__file__).parent)
-load_dotenv(PROJECT_ROOT / ".env")
+# override=True makes .env the source of truth. Without this, stale shell exports
+# (e.g. an old RWA_XYZ_API_KEY exported in a prior session) silently beat out .env.
+load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 
 class Env(BaseModel):

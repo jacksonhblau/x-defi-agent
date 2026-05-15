@@ -37,13 +37,40 @@ def _close_pool_on_exit() -> None:
 atexit.register(_close_pool_on_exit)
 
 
+def _configure_connection(conn: psycopg.Connection) -> None:
+    """Per-connection setup for Supabase Transaction Pooler compatibility.
+
+    Two protections:
+    1. Disable psycopg's auto-prepared statements (prevents future name collisions).
+    2. DEALLOCATE ALL to wipe any prepared statements that survived from an
+       earlier client on the same recycled physical connection.
+    """
+    conn.prepare_threshold = None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("deallocate all")
+        conn.commit()
+    except Exception:
+        # If the connection is in a bad state, the next real query will surface it.
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+
 def pool() -> ConnectionPool:
     global _pool
     if _pool is None:
         url = config.env().database_url
         if not url:
             raise RuntimeError("DATABASE_URL is not set in .env")
-        _pool = ConnectionPool(conninfo=url, min_size=1, max_size=5, open=True)
+        _pool = ConnectionPool(
+            conninfo=url,
+            min_size=1,
+            max_size=5,
+            open=True,
+            configure=_configure_connection,
+        )
     return _pool
 
 
@@ -134,3 +161,48 @@ def apply_schema_file(schema_path: str) -> None:
     with conn() as c, c.cursor() as cur:
         cur.execute(sql)
         c.commit()
+
+
+# Default seed for run_jobs. Stored in Python so we don't depend on SQL-statement
+# ordering inside a migrate transaction. Idempotent via ON CONFLICT (name).
+DEFAULT_RUN_JOBS = [
+    # (name, description, command, cron, sort_order)
+    ("ingest_defillama",  "Pull RWA-tagged protocols from DeFiLlama; emit TVL-delta signals",   "ingest --source defillama",   "*/10 * * * *", 10),
+    ("ingest_rwa_xyz",    "Pull top tokenized assets from RWA.xyz API",                         "ingest --source rwa_xyz",     "*/15 * * * *", 11),
+    ("ingest_telegram",   "Pull recent messages from @RWAxyzNewswire Telegram channel",         "ingest --source telegram",    "*/5 * * * *",  12),
+    ("ingest_x_firehose", "Poll watchlist X accounts for new posts",                            "ingest --source x_firehose",  "*/2 * * * *",  13),
+    ("ingest_alchemy",    "Watch onchain wallets and contract deploys",                         "ingest --source alchemy",     "*/5 * * * *",  14),
+    ("score",             "Run materiality scorer over unprocessed signals",                    "score",                       "*/5 * * * *",  20),
+    ("build_stories",     "Promote scored signals to stories",                                  "build-stories",               "*/10 * * * *", 30),
+    ("draft",             "Generate drafts for open stories (all formats)",                     "draft --all-open",            "*/15 * * * *", 40),
+    ("hot_take",          "Slow-day fallback: generate one non-obvious take per day",           "hot-take",                    "0 15 * * *",   50),
+    ("weekly_recap",      "Friday digest: top RWA flows and movers this week",                  "recap --weekly",              "0 13 * * 5",   51),
+    ("post_due",          "Drain scheduled_posts queue: publish anything past its post_at",     "post-due",                    "* * * * *",    60),
+    ("engagement_24h",    "Capture impressions/likes/RTs at +24h on each post",                 "engagement --window 24h",     "*/30 * * * *", 70),
+    ("engagement_7d",     "Capture impressions/likes/RTs at +7d on each post",                  "engagement --window 7d",      "0 */6 * * *",  71),
+]
+
+
+def seed_default_run_jobs() -> int:
+    """Insert the default run_jobs if they don't already exist. Returns inserted count."""
+    inserted = 0
+    with conn() as c, c.cursor() as cur:
+        for name, desc, cmd, cron, order in DEFAULT_RUN_JOBS:
+            cur.execute(
+                """
+                insert into run_jobs (name, description, command, cron, sort_order)
+                values (%s, %s, %s, %s, %s)
+                on conflict (name) do update
+                  set description = excluded.description,
+                      command = excluded.command,
+                      cron = coalesce(run_jobs.cron, excluded.cron),  -- preserve user cron edits
+                      sort_order = excluded.sort_order
+                returning (xmax = 0) as inserted
+                """,
+                (name, desc, cmd, cron, order),
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                inserted += 1
+        c.commit()
+    return inserted

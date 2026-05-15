@@ -160,7 +160,27 @@ def generate_thread(story_brief: dict[str, Any]) -> dict[str, Any]:
         if raw.endswith("```"):
             raw = raw.rsplit("```", 1)[0]
         raw = raw.removeprefix("json\n").strip()
-    tweets = json.loads(raw)
+    try:
+        tweets = json.loads(raw)
+    except json.JSONDecodeError:
+        # Claude returned something that isn't a JSON array (e.g. empty string,
+        # prose, or NO_TAKE_AVAILABLE marker). Surface as a failed draft rather
+        # than crashing the whole pipeline.
+        return {
+            "format": "thread",
+            "body": raw[:2000] if raw else "(empty response from model)",
+            "body_json": None,
+            "ai_check_passed": False,
+            "ai_check_flags": [f"json_parse_failed:'{raw[:100]}'"],
+        }
+    if not isinstance(tweets, list) or not all(isinstance(t, str) for t in tweets):
+        return {
+            "format": "thread",
+            "body": str(tweets)[:2000],
+            "body_json": None,
+            "ai_check_passed": False,
+            "ai_check_flags": [f"thread_shape_invalid:expected list of strings, got {type(tweets).__name__}"],
+        }
     source_handles = story_brief.get("source_handles", []) or []
     flags: list[str] = []
     for i, t in enumerate(tweets):
@@ -227,11 +247,13 @@ def save_drafts_to_db(story_id: str, drafts: list[dict[str, Any]]) -> list[str]:
     return ids
 
 
-def draft_all_open(limit: int = 20) -> dict[str, int]:
+def draft_all_open(limit: int = 20, verbose: bool = True) -> dict[str, int]:
     """Pull all open stories and generate + persist drafts for each one.
 
+    Prints progress to stdout as each story is drafted (set verbose=False to silence).
     Returns counts: {'stories': N, 'drafts': M}
     """
+    import sys
     from .. import db
     from psycopg.rows import dict_row
 
@@ -249,8 +271,12 @@ def draft_all_open(limit: int = 20) -> dict[str, int]:
         )
         stories = cur.fetchall()
 
+    if verbose:
+        print(f"Drafting {len(stories)} open stories...", flush=True)
+
     n_drafts = 0
-    for s in stories:
+    n_failed = 0
+    for i, s in enumerate(stories, start=1):
         brief = {
             "id": s["id"],
             "headline": s["headline"],
@@ -260,7 +286,24 @@ def draft_all_open(limit: int = 20) -> dict[str, int]:
             "format_recommendation": s["format_recommendation"],
             "narrative_angle": s["narrative_angle"],
         }
-        drafts = generate_for_story(brief)
-        ids = save_drafts_to_db(s["id"], drafts)
-        n_drafts += len(ids)
-    return {"stories": len(stories), "drafts": n_drafts}
+        formats = brief["format_recommendation"]
+        if verbose:
+            print(f"  [{i}/{len(stories)}] {brief['headline'][:60]:60s} formats={formats}", flush=True)
+        try:
+            drafts = generate_for_story(brief)
+            ids = save_drafts_to_db(s["id"], drafts)
+            n_drafts += len(ids)
+            if verbose:
+                # Summarize the AI-check pass/fail per draft
+                for d in drafts:
+                    status = "ok" if d.get("ai_check_passed") else f"FLAGS: {d.get('ai_check_flags')}"
+                    print(f"      {d['format']:10s} → {status}", flush=True)
+        except Exception as e:
+            n_failed += 1
+            if verbose:
+                print(f"      ERROR: {type(e).__name__}: {str(e)[:200]}", flush=True)
+            # Don't crash the whole batch on one story's failure
+            continue
+    if verbose:
+        print(f"Done. {n_drafts} drafts saved, {n_failed} stories failed.", flush=True)
+    return {"stories": len(stories), "drafts": n_drafts, "failed": n_failed}

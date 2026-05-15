@@ -1,0 +1,310 @@
+{
+  "_comment": "Realistic example rows for each table. Use these to understand the actual shape of payloads — especially the nested objects on RWA.xyz signals and the markdown text on Telegram signals. All ids are fake but the structure matches production.",
+
+  "signals_defillama": {
+    "id": "c40dbed1-ffc6-4097-8792-4e31c816e640",
+    "created_at": "2026-05-14T22:00:01.234567Z",
+    "observed_at": "2026-05-14T22:00:00Z",
+    "source": "defillama",
+    "source_id": "blackrock-buidl",
+    "entity": "blackrock-buidl",
+    "signal_type": "tvl_delta",
+    "payload": {
+      "name": "BlackRock BUIDL",
+      "slug": "blackrock-buidl",
+      "category": "RWA",
+      "chain": "Multi-Chain",
+      "tvl_usd": 2992335102,
+      "change_1d_pct": 5.29,
+      "change_7d_pct": 1.05,
+      "twitter": "BlackRock",
+      "url": "https://defillama.com/protocol/blackrock-buidl"
+    },
+    "dedup_hash": "sha256_fake_hash",
+    "processed_at": "2026-05-14T22:00:15.789Z",
+    "materiality_score": 82,
+    "novelty_score": 64,
+    "promoted_to_story_id": "4396b171-6226-4340-a66a-0c0542556ca2",
+    "notes": "Top tokenized treasury fund up 5% intraday on $150M+ inflow. Strong signal."
+  },
+
+  "signals_rwa_xyz": {
+    "id": "8a2c19f0-1234-5678-9abc-def012345678",
+    "created_at": "2026-05-14T22:20:26.913285Z",
+    "observed_at": "2026-05-14T22:20:00Z",
+    "source": "rwa_xyz",
+    "source_id": "51",
+    "entity": "rwa_asset:51",
+    "signal_type": "aum_delta",
+    "payload": {
+      "asset_id": 51,
+      "name": "Circle USYC",
+      "asset_class": "US Treasury Debt",
+      "manager": "Circle International",
+      "chain": null,
+      "url": "https://app.rwa.xyz/asset/51",
+      "circulating_market_value_dollar": {
+        "val": 2977173060.563052,
+        "val_7d": 2989960235.2173305,
+        "val_30d": 2666277192.6928625,
+        "val_90d": 1570435958.492194,
+        "chg_7d_amt": -12787174.654278278,
+        "chg_7d_pct": -0.42767039185552314,
+        "chg_30d_amt": 310895867.87018967,
+        "chg_30d_pct": 11.66029806361558,
+        "chg_90d_amt": 1406737102.0708582,
+        "chg_90d_pct": 89.57621572938854
+      },
+      "previous_market_value_dollar": 2826987654.0,
+      "change_pct": 5.31,
+      "first_seen_at": "2026-05-14T22:20:26.913285Z"
+    },
+    "dedup_hash": "sha256_fake_hash_2",
+    "processed_at": "2026-05-14T22:20:45.123Z",
+    "materiality_score": 71,
+    "novelty_score": 58,
+    "promoted_to_story_id": null,
+    "notes": "Sustained AUM growth on top-3 tokenized treasury asset. Noted but not headline-worthy."
+  },
+
+  "signals_telegram_newswire": {
+    "id": "4c0d5cd3-0a44-4bc2-94ff-1b9cbe35e139",
+    "created_at": "2026-05-14T21:20:38.456789Z",
+    "observed_at": "2026-05-14T21:20:38Z",
+    "source": "telegram_newswire",
+    "source_id": "9123",
+    "entity": "telegram:RWAxyzNewswire:9123",
+    "signal_type": "newsfeed",
+    "payload": {
+      "channel": "RWAxyzNewswire",
+      "message_id": 9123,
+      "text": "**General Tensor Acquires Backprop Finance to Expand Bittensor Infrastructure**\n\n• The deal gives General Tensor control over one of Bittensor's largest decentralized trading platforms for subnet tokens.\n\n• Backprop Finance specializes in Dynamic TAO (dTAO) subnet trading.\n\n• The acquisition follows General Tensor's $5M fundraise backed by Digital Currency Group.\n\n[Source](https://techbullion.com/general-tensor-expands-beyond-validators-with-backprop-finance-acquisition/)",
+      "date": "2026-05-14T21:20:38+00:00",
+      "url": "https://t.me/RWAxyzNewswire/9123",
+      "views": 60,
+      "forwards": 2
+    },
+    "dedup_hash": "sha256_fake_hash_3",
+    "processed_at": "2026-05-14T21:21:00.000Z",
+    "materiality_score": 55,
+    "novelty_score": 67,
+    "promoted_to_story_id": null,
+    "notes": "Niche Bittensor M&A. Outside core RWA beat; pass."
+  },
+
+  "stories_defillama_derived": {
+    "id": "4396b171-6226-4340-a66a-0c0542556ca2",
+    "created_at": "2026-05-14T22:00:30Z",
+    "headline": "BlackRock BUIDL: 24h TVL move +5.29%",
+    "narrative_angle": "rwa protocol tvl shift; assess size, direction, and magnitude vs peers",
+    "entities": ["@BlackRock"],
+    "source_handles": ["@DefiLlama"],
+    "key_data_points": [
+      {"label": "TVL", "value": "$2.99B", "source": "@DefiLlama"},
+      {"label": "24h change", "value": "+5.29%", "source": "@DefiLlama"},
+      {"label": "7d change", "value": "+1.05%", "source": "@DefiLlama"},
+      {"label": "Category", "value": "RWA", "source": "@DefiLlama"},
+      {"label": "Chain", "value": "Multi-Chain", "source": "@DefiLlama"}
+    ],
+    "graphic_spec": null,
+    "format_recommendation": ["single", "thread"],
+    "signals_ids": ["c40dbed1-ffc6-4097-8792-4e31c816e640"],
+    "hot_take": false,
+    "status": "drafted"
+  },
+
+  "stories_telegram_derived": {
+    "id": "76944450-0b7c-474d-9fc0-5aff047cd962",
+    "created_at": "2026-05-14T21:25:00Z",
+    "headline": "Kraken Replaces LayerZero with Chainlink for Cross-Chain Bridge",
+    "narrative_angle": "newsfeed item — write an analyst take that adds context, mechanism, or contrast",
+    "entities": [],
+    "source_handles": ["@CoinDesk"],
+    "key_data_points": [
+      {"label": "Headline", "value": "Kraken Replaces LayerZero with Chainlink for Cross-Chain Bridge", "source": "@CoinDesk"},
+      {"label": "Full message", "value": "**Kraken Replaces LayerZero with Chainlink for Cross-Chain Bridge**\n\n• Migration follows $292M LayerZero bridge exploit at Kelp in April...", "source": "@CoinDesk"},
+      {"label": "Source URL", "value": "https://www.coindesk.com/business/2026/05/14/kraken-to-replace-layerzero-with-chainlink", "source": "@CoinDesk"},
+      {"label": "Telegram URL", "value": "https://t.me/RWAxyzNewswire/9109", "source": "internal"}
+    ],
+    "graphic_spec": null,
+    "format_recommendation": ["single"],
+    "signals_ids": ["3040032e-d2d6-41e4-b995-a644945c2691"],
+    "hot_take": false,
+    "status": "drafted"
+  },
+
+  "drafts_single": {
+    "id": "d1a2b3c4-1111-2222-3333-444455556666",
+    "story_id": "4396b171-6226-4340-a66a-0c0542556ca2",
+    "created_at": "2026-05-14T22:01:00Z",
+    "format": "single",
+    "variant_label": null,
+    "body": "BUIDL added $150M in a single day, taking @BlackRock's tokenized treasury fund to $2.99B TVL. The +5.29% intraday move came on flat 7d numbers (+1.05%), meaning this was concentrated — one allocator, not a steady accumulation. @DefiLlama tracking confirms.",
+    "body_json": null,
+    "graphic_url": null,
+    "reply_to_tweet_id": null,
+    "quote_tweet_id": null,
+    "ai_check_passed": true,
+    "ai_check_flags": [],
+    "status": "pending",
+    "reviewer_notes": null,
+    "reviewed_at": null,
+    "edited_body": null
+  },
+
+  "drafts_thread": {
+    "id": "d2b3c4d5-aaaa-bbbb-cccc-dddddddddddd",
+    "story_id": "4396b171-6226-4340-a66a-0c0542556ca2",
+    "created_at": "2026-05-14T22:01:05Z",
+    "format": "thread",
+    "variant_label": null,
+    "body": "BUIDL just crossed $2.99B in TVL.\n\nThe +5.29% single-day move means roughly $150M of new inflows in 24 hours. That's not retail rebalancing.\n\n@BlackRock's tokenized treasury fund is now multi-chain and absorbing capital at a pace most DeFi protocols would kill for. 7d change is only +1.05%, so most of this is a concentrated burst.\n\n$150M in a day into a tokenized MMF tells you someone large either allocated fresh capital or migrated from a competing product. Either way, BUIDL is becoming the default parking lot.\n\nThe question worth asking, per @DefiLlama: at $3B, does BUIDL start pulling liquidity from other onchain treasury products, or does it grow the whole category?",
+    "body_json": [
+      "BUIDL just crossed $2.99B in TVL.",
+      "The +5.29% single-day move means roughly $150M of new inflows in 24 hours. That's not retail rebalancing.",
+      "@BlackRock's tokenized treasury fund is now multi-chain and absorbing capital at a pace most DeFi protocols would kill for. 7d change is only +1.05%, so most of this is a concentrated burst.",
+      "$150M in a day into a tokenized MMF tells you someone large either allocated fresh capital or migrated from a competing product. Either way, BUIDL is becoming the default parking lot.",
+      "The question worth asking, per @DefiLlama: at $3B, does BUIDL start pulling liquidity from other onchain treasury products, or does it grow the whole category?"
+    ],
+    "graphic_url": null,
+    "ai_check_passed": true,
+    "ai_check_flags": [],
+    "status": "approved",
+    "reviewer_notes": null,
+    "reviewed_at": "2026-05-14T22:30:00Z",
+    "edited_body": null
+  },
+
+  "drafts_flagged": {
+    "id": "d3c4d5e6-eeee-ffff-1111-222233334444",
+    "story_id": "1ef4764c-24ce-497e-b473-2d76274d803e",
+    "created_at": "2026-05-14T22:02:00Z",
+    "format": "single",
+    "variant_label": null,
+    "body": "@Credix_finance TVL dropped to $1. Down 97% in 24h, 100% in 7 days. RWA Lending on Solana is officially dead.",
+    "body_json": null,
+    "ai_check_passed": false,
+    "ai_check_flags": ["leading_mention:'@Credix_finance TVL dropped to...' — X will suppress this in the timeline"],
+    "status": "pending",
+    "reviewer_notes": null,
+    "reviewed_at": null,
+    "edited_body": null
+  },
+
+  "scheduled_posts_queued": {
+    "id": "sp01a2b3-1111-2222-3333-444455556666",
+    "draft_id": "d2b3c4d5-aaaa-bbbb-cccc-dddddddddddd",
+    "created_at": "2026-05-14T22:30:05Z",
+    "post_at": "2026-05-15T13:00:00Z",
+    "status": "queued",
+    "attempts": 0,
+    "last_error": null
+  },
+
+  "scheduled_posts_posted": {
+    "id": "sp02b3c4-aaaa-bbbb-cccc-dddddddddddd",
+    "draft_id": "d4e5f6g7-1111-2222-3333-444455556666",
+    "created_at": "2026-05-14T20:00:00Z",
+    "post_at": "2026-05-14T21:00:00Z",
+    "status": "posted",
+    "attempts": 1,
+    "last_error": null
+  },
+
+  "posts": {
+    "id": "p1a2b3c4-1111-2222-3333-444455556666",
+    "draft_id": "d4e5f6g7-1111-2222-3333-444455556666",
+    "scheduled_post_id": "sp02b3c4-aaaa-bbbb-cccc-dddddddddddd",
+    "posted_at": "2026-05-14T21:00:15Z",
+    "tweet_ids": ["1234567890123456789"],
+    "root_tweet_id": "1234567890123456789",
+    "format": "single",
+    "body": "Tokenized treasury TVL crossed $31B this week, +200% YoY. @DefiLlama's tracker hit a new high yesterday on @BlackRock BUIDL flows alone."
+  },
+
+  "engagement_24h": {
+    "id": "e1a2b3c4-1111-2222-3333-444455556666",
+    "post_id": "p1a2b3c4-1111-2222-3333-444455556666",
+    "captured_at": "2026-05-15T21:00:00Z",
+    "window_label": "24h",
+    "impressions": 12483,
+    "likes": 84,
+    "retweets": 12,
+    "replies": 9,
+    "bookmarks": 31,
+    "quotes": 2,
+    "profile_clicks": 47,
+    "url_clicks": 23
+  },
+
+  "run_jobs": [
+    {
+      "id": "rj01a2b3-1111-2222-3333-444455556666",
+      "name": "ingest_defillama",
+      "description": "Pull RWA-tagged protocols from DeFiLlama; emit TVL-delta signals",
+      "command": "ingest --source defillama",
+      "cron": "*/10 * * * *",
+      "enabled": true,
+      "last_run_at": "2026-05-14T22:30:00Z",
+      "next_run_at": "2026-05-14T22:40:00Z",
+      "last_status": "ok",
+      "last_error": null,
+      "run_now": false,
+      "sort_order": 10
+    },
+    {
+      "id": "rj02b3c4-aaaa-bbbb-cccc-dddddddddddd",
+      "name": "post_due",
+      "description": "Drain scheduled_posts queue: publish anything past its post_at",
+      "command": "post-due",
+      "cron": "* * * * *",
+      "enabled": true,
+      "last_run_at": "2026-05-14T22:35:00Z",
+      "next_run_at": "2026-05-14T22:36:00Z",
+      "last_status": "ok",
+      "last_error": null,
+      "run_now": false,
+      "sort_order": 60
+    },
+    {
+      "id": "rj03c4d5-eeee-ffff-1111-222233334444",
+      "name": "ingest_x_firehose",
+      "description": "Poll watchlist X accounts for new posts",
+      "command": "ingest --source x_firehose",
+      "cron": "*/2 * * * *",
+      "enabled": false,
+      "last_run_at": "2026-05-14T20:00:00Z",
+      "next_run_at": null,
+      "last_status": "error",
+      "last_error": "Unknown source: x_firehose (worker not yet implemented)",
+      "run_now": false,
+      "sort_order": 13
+    }
+  ],
+
+  "app_config_example": {
+    "id": 1,
+    "data": {
+      "materiality": {
+        "default_threshold": 60,
+        "novelty_threshold": 50,
+        "minimum_for_thread": 75
+      },
+      "cadence": {
+        "daily_post_cap": 8,
+        "min_minutes_between_posts": 75,
+        "thread_max_per_day": 2
+      },
+      "posting_windows_et": [
+        {"start_hour": 9, "end_hour": 10},
+        {"start_hour": 12, "end_hour": 13},
+        {"start_hour": 17, "end_hour": 18},
+        {"start_hour": 20, "end_hour": 21}
+      ],
+      "onchain": {
+        "tvl_delta_threshold_pct": 5,
+        "apy_delta_threshold_bps": 50
+      }
+    }
+  }
+}

@@ -1,0 +1,64 @@
+# flyctl launch added from .gitignore
+# Local helper scripts (delete after use)
+**/PUSH_TO_GITHUB.sh
+**/COMMIT_AND_RESTART.sh
+
+# Secrets - NEVER commit these
+**/.env
+**/.env.bak
+**/.env.local
+**/.env.*.local
+**/*.bak
+**/*.session
+**/data/telegram.session*
+
+# Mac Finder duplicates
+**/* copy
+**/* copy 2
+**/* copy.*
+**/.env.example copy
+
+# Node
+**/node_modules
+**/.next
+**/out
+**/dist
+**/build
+**/*.log
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+
+# Python
+**/__pycache__
+**/*.py[cod]
+**/*$py.class
+**/.venv
+**/venv
+**/*.egg-info
+
+# OS
+**/.DS_Store
+**/Thumbs.db
+
+# IDE
+**/.vscode
+**/.idea
+**/*.swp
+**/*.swo
+
+# Local data
+**/data
+**/*.sqlite
+**/*.db
+
+# Playwright
+**/playwright-report
+**/test-results
+
+# Fly
+**/fly.toml.local
+
+# flyctl launch added from apps/workers-py/.venv/.gitignore
+# Created by venv; see https://docs.python.org/3/library/venv.html
+apps/workers-py/.venv/**/*

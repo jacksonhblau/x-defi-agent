@@ -1,5 +1,6 @@
-# Local helper script (delete after use)
+# Local helper scripts (delete after use)
 PUSH_TO_GITHUB.sh
+COMMIT_AND_RESTART.sh
 
 # Secrets - NEVER commit these
 .env
