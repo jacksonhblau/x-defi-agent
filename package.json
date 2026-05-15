@@ -1,0 +1,14 @@
+{
+  "name": "x-defi-agent",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "cd apps/review-ui && npm run dev",
+    "build": "cd apps/review-ui && npm run build",
+    "start": "cd apps/review-ui && npm run start"
+  }
+}
