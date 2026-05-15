@@ -1,0 +1,103 @@
+{
+  "_doc": "DRAFT — populated from Q&A session on 2026-05-15 (resume + investments disclosed in chat). Review and sign-off before going live. The anti-AI check (apps/workers-py/src/workers/drafts/anti_ai.py) reads this file at runtime. Schema matches config/personal_facts.example.json.",
+  "_last_updated": "2026-05-15",
+
+  "identity": {
+    "handle": "jacksonblau",
+    "name": "Jackson Blau",
+    "beat": "tokenized RWA, institutional structured finance",
+    "self_description_short": "tokenized RWA analyst at Inveniam",
+    "self_description_long": "I'm at Inveniam (Manager of DeFi and Crypto), tracking tokenized real-world assets and institutional structured finance. I focus on mechanism design and how onchain plumbing changes who has authority over canonical state. Previously VP of Education at infineo and an early ecosystem participant at Security Token Market."
+  },
+
+  "things_i_have_done": [
+    { "verb": "work", "object": "as Manager of DeFi and Crypto at Inveniam (Oct 2025 – Present), reporting to the Chief Strategy Officer", "evidence_url": "https://www.linkedin.com/in/jacksonblau", "approved_to_reference": true },
+    { "verb": "worked", "object": "as VP of Education at infineo (Jan 2025 – Oct 2025)", "evidence_url": "", "approved_to_reference": true },
+    { "verb": "worked", "object": "as Director of Business Development at infineo (Jun 2024 – Jan 2025)", "evidence_url": "", "approved_to_reference": true },
+    { "verb": "worked", "object": "as Head of Community Management at infineo (Jul 2023 – Jun 2024)", "evidence_url": "", "approved_to_reference": true },
+    { "verb": "worked", "object": "as Community Manager & Research Analyst at Security Token Market (Jun 2021 – Apr 2023)", "evidence_url": "", "approved_to_reference": true, "note": "STM was later acquired by RedStone (an early version of RWA.xyz)." },
+    { "verb": "graduated", "object": "from the University of Michigan in 2023 with a BA in Economics and Entrepreneurship, University Honors", "evidence_url": "", "approved_to_reference": true },
+    { "verb": "completed", "object": "an independent study in Blockchain and Tokenization at Michigan", "evidence_url": "", "approved_to_reference": true },
+    { "verb": "attended", "object": "ETH Denver 2026", "evidence_url": "", "approved_to_reference": true, "note": "Public. OK to reference '36 in-person institutional and protocol meetings'." },
+    { "verb": "attended", "object": "ETHcc Cannes, RWA Summit, and Vault Summit", "evidence_url": "", "approved_to_reference": true, "note": "~81 in-person meetings across ~70 companies (vault infrastructure providers, curators, lending/borrowing allocators)." },
+    { "verb": "attended", "object": "Consensus Miami 2026", "evidence_url": "", "approved_to_reference": true },
+    { "verb": "registered for", "object": "Token2049 Singapore (fall 2026)", "evidence_url": "", "approved_to_reference": true },
+    { "verb": "co-host", "object": "the WOLF Financial Crypto Tokenization X Spaces alongside the infineo Chief Economist", "evidence_url": "", "approved_to_reference": true, "note": "10 episodes in Q2 2025 alone." },
+    { "verb": "appeared on", "object": "19+ podcasts and X Spaces covering RWA tokenization, DeFi, and life-insurance digital assets", "evidence_url": "", "approved_to_reference": true },
+    { "verb": "led", "object": "the EXOD arbitrage analysis at Security Token Market in 2022, generating +146% over three weeks across tZERO and Securitize Markets", "evidence_url": "", "approved_to_reference": true, "note": "Published as the STM Arbitrage Report; Jackson authored the EXOD walkthrough section." },
+    { "verb": "was named", "object": "a GRT advocate and received a grant from the Graph Foundation", "evidence_url": "", "approved_to_reference": true, "note": "Past involvement; no current GRT position." },
+    { "verb": "was involved in", "object": "the early Cardano ecosystem in late 2020 – early 2021", "evidence_url": "", "approved_to_reference": true, "note": "Past involvement; no current ADA position." }
+  ],
+
+  "things_i_have_built": [
+    { "verb": "lead-authored", "object": "the Inveniam Chain (NVNM) whitepaper", "evidence_url": "", "approved_to_reference": true, "note": "Authorship is public. Technical implementation details before public disclosure remain off-limits." },
+    { "verb": "lead-authored", "object": "the DIOL Foundation whitepaper", "evidence_url": "", "approved_to_reference": true },
+    { "verb": "authored", "object": "the Inveniam IO Ecosystem Map for Tokenized ETFs", "evidence_url": "", "approved_to_reference": true, "note": "$1.16B AUM, 5 RWAs, 4,804 holders, $323M monthly transfer volume covered." }
+  ],
+
+  "positions_i_hold": [
+    { "asset": "BTC", "direction": "long-term, DCA accumulation; rotated to ETH after Bitcoin spiked", "approved_to_reference": true, "note": "No specific $ amount disclosed." },
+    { "asset": "ETH", "direction": "long-term, DCA accumulating (current)", "approved_to_reference": true, "note": "Rotated from BTC after Bitcoin spike. No specific $ amount disclosed." },
+    { "asset": "SPiCE VC token (on Securitize)", "direction": "small long-term holding", "approved_to_reference": true, "note": "No specific $ amount disclosed." },
+    { "asset": "RedSwan (angel investment, 2021)", "direction": "long-term private holding", "approved_to_reference": true, "note": "Small angel position from 2021." },
+    { "asset": "FIGR (Figure Technology Solutions)", "direction": "long; bought at IPO, sold at $72 top, re-entered after dip (current)", "approved_to_reference": true },
+    { "asset": "TSLA", "direction": "long (current)", "approved_to_reference": true },
+    { "asset": "TSM (Taiwan Semiconductor)", "direction": "long (current)", "approved_to_reference": true },
+    { "asset": "AAPL", "direction": "long (current)", "approved_to_reference": true },
+    { "asset": "NVDA", "direction": "long (current)", "approved_to_reference": true },
+    { "asset": "COIN (Coinbase)", "direction": "long (current)", "approved_to_reference": true },
+    { "asset": "AMZN", "direction": "long (current)", "approved_to_reference": true },
+    { "asset": "MSFT", "direction": "long (current)", "approved_to_reference": true },
+    { "asset": "BBBY common + BBBYWS warrants (exp 10/07/2026)", "direction": "speculative remainder position", "approved_to_reference": true, "note": "Bed Bath & Beyond post-bankruptcy remainder. No $ amount." },
+    { "asset": "SPY (S&P 500 ETF)", "direction": "long (current)", "approved_to_reference": true },
+    { "asset": "EXOD (Exodus security token)", "direction": "past arbitrage trade only; no current position", "approved_to_reference": true, "note": "Documented in the STM Arbitrage Report." },
+    { "asset": "GRT (The Graph)", "direction": "no current position; past community involvement and Graph Foundation grant recipient", "approved_to_reference": true },
+    { "asset": "ADA / early Cardano ecosystem", "direction": "no current position; past involvement late 2020 – early 2021", "approved_to_reference": true },
+    { "asset": "Detroit Lions football cards (high-end individual)", "direction": "collectible long-term hold", "approved_to_reference": true }
+  ],
+
+  "views_i_hold_strongly": [
+    { "view": "Vault infrastructure is the institutional onramp. ERC-7540 vaults, curator economics, and T+0/T+14 redemption SLAs are converging on what trad-asset managers expect.", "supporting_evidence_urls": [], "category": "thesis" },
+    { "view": "Tokenized private credit and ABS is the next leg up after treasuries. The mechanics, subordination tranches and layered facilities, translate cleanly to onchain structures.", "supporting_evidence_urls": [], "category": "thesis" },
+    { "view": "We need onchain-native assets, not digital twins. Twins inherit off-chain settlement risk; only natively-issued assets unlock composability (rehypothecation, repo, collateral atomicity); regulators are starting to require native treatment.", "supporting_evidence_urls": [], "category": "thesis" }
+  ],
+
+  "things_off_limits": [
+    "Specific deal sizes from Inveniam client work: $125M ABS, $73.95M Series 2024-1, $225M expandable, $200M-valuation DePIN token offering, $5B UAE acquisition, $340M implied value, $50M xGold Lending Pool, $5.76B / $305.8B SAM, $200B+ UK allocator, $600B+ alt asset manager, $40B+ RIA, $400M multifamily, $20M raise at $100M pre-money.",
+    "Inveniam Chain (NVNM) FDV scenarios, the $30M / 400M token allocation, $7.6B FDV / $750M daily volume targets, 94-CEX listing budget ($235k).",
+    "Named counterparties under the 30+ MNDAs negotiated at Inveniam unless those firms have publicly disclosed the relationship themselves.",
+    "Internal Inveniam Chain technical decisions before public disclosure.",
+    "Internal infineo product roadmap details.",
+    "Attorney-client-privileged communications.",
+    "Specific content of FSRA, OCC, Fed, or FDIC meetings.",
+    "Any specific dollar amount of personal positions in positions_i_hold (the assets are listed but the $ figures are not disclosed).",
+    "Claim of having met with, spoken with, or sat down with any specific named person or firm unless publicly disclosed in things_i_have_done.",
+    "Inveniam firm POV ('Inveniam thinks X', 'We at Inveniam are seeing Y') — acknowledge employment only.",
+    "Internal pipelines, named clients, or specific BD opportunities at Inveniam."
+  ],
+
+  "tone_calibration": {
+    "first_person_required_in_singles": true,
+    "first_person_required_in_threads": true,
+    "first_person_required_in_replies": true,
+    "first_person_voice_examples": [
+      "I keep seeing the BlackRock $7B filing read as a size story. I think it's a sovereignty story.",
+      "I think the conversation about 'tokenized RWAs' is going to bifurcate this year.",
+      "I'm watching for which issuers move first on natively-issued onchain assets, not twins.",
+      "I'd push back on one piece: the $150M move isn't retail rebalancing.",
+      "I keep coming back to one number from this filing.",
+      "I think the conventional take misses one thing."
+    ],
+    "first_person_voice_anti_examples": [
+      "I just closed a position in $X.",
+      "I'm at the BlackRock office and...",
+      "I built a model that proves...",
+      "I talked to the team at...",
+      "I just bought $1M of BUIDL.",
+      "Thoughts? Agree or disagree?"
+    ],
+    "voice_tics": [
+      "lead_with_unconventional_read: 'I keep seeing X read as Y. I think it's Z.', 'The interesting part of X isn't Y. It's Z.'"
+    ]
+  }
+}

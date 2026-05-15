@@ -3,13 +3,15 @@
     "default_threshold": 60,
     "novelty_threshold": 50,
     "minimum_for_thread": 75,
-    "minimum_for_hot_take_input": 40
+    "minimum_for_hot_take_input": 40,
+    "long_form_materiality_floor": 80
   },
   "cadence": {
-    "daily_post_cap": 8,
-    "min_minutes_between_posts": 45,
+    "daily_post_cap": 3,
+    "min_minutes_between_posts": 60,
     "thread_max_per_day": 2,
-    "reply_max_per_day": 5
+    "reply_max_per_day": 5,
+    "long_form_max_per_day": 1
   },
   "deduplication": {
     "window_hours": 24,
@@ -29,6 +31,21 @@
   "engagement": {
     "exemplar_percentile": 90,
     "anti_exemplar_percentile": 10,
-    "review_window_hours": [24, 168]
+    "review_window_hours": [24, 168],
+    "reply_window_minutes": [5, 15, 30],
+    "max_followup_replies_per_post": 3
+  },
+  "algo_scoring": {
+    "predicted_score_threshold": 60,
+    "max_regenerations_for_score": 3
+  },
+  "media": {
+    "required_for_every_post": true,
+    "video_materiality_floor": 80,
+    "higgsfield_monthly_credit_cap": 2000
+  },
+  "anti_ai": {
+    "personal_facts_path": "config/personal_facts.json",
+    "max_regenerations_per_draft": 3
   }
 }

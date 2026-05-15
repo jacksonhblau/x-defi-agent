@@ -54,8 +54,29 @@ def _post_single(text: str, *, reply_to: str | None = None, quote_id: str | None
     return str(resp.data["id"])
 
 
+def _assert_no_leading_mention(text: str) -> None:
+    """Refuse to post tweets whose first non-space character is @. X classifies
+    such tweets as replies to the mentioned account and hides them from the
+    main feed (reach killer). The voice rules block this upstream, but we
+    double-check here so a botched edit can't slip through.
+    """
+    stripped = text.lstrip()
+    if stripped.startswith("@"):
+        raise RuntimeError(
+            f"Refusing to post: tweet starts with @-mention which X treats as a "
+            f"reply. Edit the draft to move the mention later in the line. "
+            f"Offending text: {stripped[:80]!r}"
+        )
+
+
 def _post_thread(tweets: list[str]) -> list[str]:
     """Post a thread as a chain of replies. Returns all tweet ids in order."""
+    if not tweets:
+        raise RuntimeError("Refusing to post: thread has zero tweets")
+    # Only the FIRST tweet of a thread must not start with @ — subsequent
+    # tweets in the chain are already replies (to the previous tweet), so
+    # leading @-mentions there are fine.
+    _assert_no_leading_mention(tweets[0])
     ids: list[str] = []
     reply_to: str | None = None
     for t in tweets:

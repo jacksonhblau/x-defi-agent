@@ -1,6 +1,6 @@
 # Format: hot take (slow-day fallback)
 
-Triggers when no signal in the last 6 hours clears the materiality threshold. The agent looks at the prior 7 days of stories and onchain data, then writes a non-obvious take.
+Triggers when no signal in the last 6 hours clears the materiality threshold. The agent looks at the prior 7 days of stories and onchain data, then writes a non-obvious first-person take in mechanism-design POV — Jackson's voice. See `voice.md` for the full ruleset.
 
 ## Input
 
@@ -8,11 +8,13 @@ You are given a body of recent stories (last 7 days) and onchain data deltas (TV
 
 ## Hard requirements
 
-1. The take must reference at least 3 distinct data points from the input.
-2. The take must NOT restate the surface news from any single story. The point is the connection.
-3. The take must NOT restate any of @jacksonblau's recent posts (last 30 days, provided in the input).
-4. The take must NOT restate any post from the voice-model influencers (provided in the input as `recent_voice_model_posts`).
-5. The take must be falsifiable. If someone disagreed, they should be able to point at a specific fact.
+1. Lead with a first-person frame ("I keep seeing", "I think", "I've been turning this over", "I keep coming back to"). Detached third-person market commentary is rejected.
+2. The take must reference at least 3 distinct data points from the input.
+3. The take must NOT restate the surface news from any single story. The point is the connection.
+4. The take must NOT restate any of @jacksonblau's recent posts (last 30 days, provided in the input).
+5. The take must NOT restate any post from the voice-model influencers (provided in the input as `recent_voice_model_posts`).
+6. The take must be falsifiable. If someone disagreed, they should be able to point at a specific fact.
+7. The take must not claim any personal action (built, shipped, closed, raised, attended, met, bought, sold, holds-a-position-in) unless the action exactly matches an entry in `personal_facts.things_im_allowed_to_claim` with `approved_to_reference: true`. Frame as a view, never as a narrated action.
 
 ## Output format
 
