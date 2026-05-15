@@ -24,14 +24,22 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import canva, higgsfield
+from . import canva, canvas_design, higgsfield
 
 
 # ---------- Routing ----------
 
 EDITORIAL_KIND = "editorial"
-CANVA_KINDS = {"data_card", "comparison", "leaderboard", "time_series", "deploy_card"}
-COMBO_KIND = "recap_grid"  # both Higgsfield hero + Canva grid
+
+# Data-led graphic kinds → Ledger Cartography (canvas_design).
+# Replaces the old Canva-template path (Jackson's call from the algo-refit Q&A).
+CANVAS_DESIGN_KINDS = {"data_card", "comparison", "leaderboard", "deploy_card"}
+
+# `time_series` still routes to Canva (queued) for now — the Ledger Cartography
+# renderer doesn't yet have a chart layout. Falls back gracefully.
+CANVA_FALLBACK_KINDS = {"time_series"}
+
+COMBO_KIND = "recap_grid"  # editorial hero + data plate combo
 
 
 def dispatch_for_draft(
@@ -45,36 +53,38 @@ def dispatch_for_draft(
     Args:
       draft: dict with at minimum 'format' (single|thread|reply|hot_take|long_form).
       brief: story brief dict with 'graphic_kind', 'materiality_score',
-             'narrative_angle', 'key_data_points', and optionally 'canva_payload'.
+             'narrative_angle', 'key_data_points'.
       video_materiality_floor: materiality threshold above which threads get
              a Higgsfield video instead of a still image.
 
     Returns:
       list of MediaAsset dicts (one or two), each with at minimum:
         kind: 'image' | 'video'
-        source: 'higgsfield' | 'canva'
+        source: 'higgsfield' | 'canvas_design' | 'canva'
         status: 'queued' | 'running' | 'ready' | 'failed'
-        prompt: str (for higgsfield) OR
-        canva_template_slug: str + canva_design_id: str (for canva)
         storage_url: str (set when status == 'ready')
     """
     kind = (brief or {}).get("graphic_kind", EDITORIAL_KIND)
     fmt = (draft or {}).get("format", "single")
     materiality = int((brief or {}).get("materiality_score", 0) or 0)
 
-    # Pure Canva path: data-led posts.
-    if kind in CANVA_KINDS:
+    # Data-led posts → Ledger Cartography schematic plate (deterministic Python).
+    if kind in CANVAS_DESIGN_KINDS:
+        return [canvas_design.render(brief)]
+
+    # Time series (charts) — not yet covered by Ledger Cartography; keep Canva slot.
+    if kind in CANVA_FALLBACK_KINDS:
         return [canva.render(brief)]
 
-    # Combo path: weekly recap grid.
+    # Recap grid: data plate + editorial hero.
     if kind == COMBO_KIND:
-        return [canva.render(brief), higgsfield.render(brief, fmt)]
+        return [canvas_design.render(brief), higgsfield.render(brief, fmt)]
 
-    # High-materiality editorial thread: both editorial hero + Canva data card.
+    # High-materiality editorial thread: editorial hero + supporting data plate.
     if kind == EDITORIAL_KIND and materiality >= video_materiality_floor and fmt == "thread":
         return [
             higgsfield.render(brief, "hero_video"),
-            canva.render(brief) if (brief or {}).get("canva_payload") else higgsfield.render(brief, fmt),
+            canvas_design.render(brief) if (brief or {}).get("key_data_points") else higgsfield.render(brief, fmt),
         ]
 
     # Default editorial path: single Higgsfield asset matching the format.
@@ -84,5 +94,6 @@ def dispatch_for_draft(
 __all__ = [
     "dispatch_for_draft",
     "higgsfield",
+    "canvas_design",
     "canva",
 ]
