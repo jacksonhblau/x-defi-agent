@@ -183,7 +183,7 @@ export function BodyDrawer({ draft, open, onClose, onApprove, onReject, onEdit }
         {/* Footer actions */}
         {(draft.status === 'pending' || draft.status === 'edited') && (
           <div className="border-t border-border px-5 py-3 flex items-center gap-2 shrink-0 bg-background">
-            {onApprove && draft.status !== 'approved' && (
+            {onApprove && (
               <button
                 onClick={() => { onApprove(draft.id); onClose() }}
                 className="px-3 h-8 text-sm font-medium rounded bg-accent text-white hover:opacity-90 transition-opacity"
@@ -199,7 +199,7 @@ export function BodyDrawer({ draft, open, onClose, onApprove, onReject, onEdit }
                 Edit
               </button>
             )}
-            {onReject && draft.status !== 'rejected' && (
+            {onReject && (
               <button
                 onClick={() => { onReject(draft.id); onClose() }}
                 className="px-3 h-8 text-sm font-medium rounded text-danger hover:bg-[#fef2f2] transition-colors"

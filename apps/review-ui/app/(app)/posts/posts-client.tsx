@@ -1,6 +1,7 @@
 'use client'
 
-import { useRouter, useTransition } from 'next/navigation'
+import { useRouter } from 'next/navigation'
+import { useTransition } from 'react'
 import { ExternalLink } from 'lucide-react'
 import { truncate } from '@/lib/utils'
 import type { Post, Engagement } from '@/lib/types'
