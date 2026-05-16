@@ -123,14 +123,19 @@ def insert_signal(
 
 
 def fetch_unprocessed_signals(limit: int = 50) -> list[dict[str, Any]]:
-    """Return signals where processed_at is null, oldest first."""
+    """Return signals where processed_at is null, NEWEST first.
+
+    Newest-first matters for a news agent: stale news has zero engagement
+    value, fresh news is what we want to surface. Older unscored signals
+    naturally age out (cron keeps polling new ones; the queue drains forward).
+    """
     with conn() as c, c.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
             select id::text, observed_at, source, source_id, entity, signal_type, payload
             from signals
             where processed_at is null
-            order by observed_at asc
+            order by observed_at desc
             limit %s
             """,
             (limit,),
