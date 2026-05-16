@@ -46,7 +46,13 @@ MODEL_DEFAULTS = {
     "single": ("gpt_image_2", "1:1", "image"),
     "hot_take": ("gpt_image_2", "1:1", "image"),
     "reply": ("nano_banana_flash", "1:1", "image"),
-    "thread": ("kling-3", "16:9", "video"),
+    # Threads use still images for now — video generation isn't wired in
+    # production (only OpenAI gpt-image-1 is). 1:1 matches singles so X
+    # renders both formats consistently in-feed.
+    "thread": ("gpt_image_2", "1:1", "image"),
+    # hero_video / recap remain video format definitions for future wire-up;
+    # they're currently unreachable because dispatch_for_draft routes
+    # everything through the still-image path.
     "hero_video": ("kling-3", "16:9", "video"),
     "long_form": ("gpt_image_2", "16:9", "image"),
     "recap": ("veo-3-1", "16:9", "video"),

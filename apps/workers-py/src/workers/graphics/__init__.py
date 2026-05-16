@@ -64,18 +64,19 @@ def dispatch_for_draft(
     fmt = (draft or {}).get("format", "single")
     materiality = int((brief or {}).get("materiality_score", 0) or 0)
 
-    # High-materiality editorial thread: short video hero + still plate.
-    if kind == EDITORIAL_KIND and materiality >= video_materiality_floor and fmt == "thread":
-        return [
-            higgsfield.render(brief, "hero_video"),
-            higgsfield.render(brief, fmt),
-        ]
+    # NOTE: video generation isn't wired in production yet (only OpenAI
+    # gpt-image-1 is). The hero_video / recap video paths would return
+    # queued assets that fail the media-presence check and block
+    # ready_for_review. Until a video backend is wired (Veo/Kling/etc.),
+    # everything routes to a single still image. The conditionals below
+    # are kept commented for fast re-enablement once the backend exists.
+    #
+    # if kind == EDITORIAL_KIND and materiality >= video_materiality_floor and fmt == "thread":
+    #     return [higgsfield.render(brief, "hero_video"), higgsfield.render(brief, fmt)]
+    # if kind == COMBO_KIND:
+    #     return [higgsfield.render(brief, fmt), higgsfield.render(brief, "hero_video")]
 
-    # Recap grid: still plate + short video.
-    if kind == COMBO_KIND:
-        return [higgsfield.render(brief, fmt), higgsfield.render(brief, "hero_video")]
-
-    # Everything else: single Higgsfield image.
+    # Single still image — works for every format including thread.
     return [higgsfield.render(brief, fmt)]
 
 
