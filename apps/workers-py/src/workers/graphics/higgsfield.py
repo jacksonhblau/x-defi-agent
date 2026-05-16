@@ -155,13 +155,74 @@ def pick_layout(brief: dict[str, Any], format_hint: str) -> str:
     return "Single centered hero stat with its label rendered semibold below."
 
 
+# Placeholder values that must NEVER be rendered into an image. If a kdp's value
+# matches one of these (case-insensitive, whitespace-trimmed), the kdp is dropped
+# from the prompt entirely. Rendering "N/a" as literal text in a financial
+# infographic looks worse than rendering no stat at all.
+_PLACEHOLDER_VALUES = frozenset({
+    "", "n/a", "na", "n/a aum", "—", "–", "-", "--", "tbd", "tba",
+    "unknown", "none", "null", "pending", "?", "??",
+})
+
+
+def _is_meaningful_value(value: str) -> bool:
+    """Return True if the value is a real datum we can render, not a placeholder.
+
+    Used to drop kdps like `{"label": "AUM", "value": "n/a"}` before they reach
+    the image prompt. Without this filter, OpenAI faithfully renders "N/a" as
+    text in the infographic, which is worse than showing no stat at all.
+    """
+    if not value:
+        return False
+    v = value.strip().lower()
+    if v in _PLACEHOLDER_VALUES:
+        return False
+    # Catch compound placeholders: "$n/a", "n/a AUM", "USD n/a", etc.
+    if "n/a" in v:
+        return False
+    return True
+
+
+def _clean_headline(headline: str) -> str:
+    """Strip 'n/a AUM' style placeholders out of a headline.
+
+    Story-builder titles like 'Foo Fund: n/a AUM (Commodities)' embed the
+    missing data point in the title itself. Drop the placeholder so the model
+    doesn't render 'N/a' in the hero type. Also tidy up trailing punctuation
+    that gets orphaned by the removal.
+    """
+    import re
+    if not headline:
+        return headline
+    h = headline
+    # `: n/a AUM` → drop
+    h = re.sub(r":\s*n/a\s+AUM\b", "", h, flags=re.IGNORECASE)
+    # `(n/a AUM)` → drop
+    h = re.sub(r"\(\s*n/a\s+AUM\s*\)", "", h, flags=re.IGNORECASE)
+    # bare ` n/a AUM` → drop
+    h = re.sub(r"\s+n/a\s+AUM\b", "", h, flags=re.IGNORECASE)
+    # generic ` n/a ` token cleanup (won't catch dollarized variants but safe)
+    h = re.sub(r"\bn/a\b", "", h, flags=re.IGNORECASE)
+    # Collapse whitespace and orphaned punctuation
+    h = re.sub(r"\s+", " ", h)
+    h = re.sub(r"\s+\)", ")", h)
+    h = re.sub(r"\(\s*\)", "", h)
+    h = re.sub(r":\s*$", "", h)
+    h = re.sub(r"\s+,", ",", h)
+    return h.strip()
+
+
 def _format_key_data_points(kdps: list[dict[str, Any]], limit: int = 6) -> str:
-    """Render key_data_points as a verbatim block the model must reproduce."""
+    """Render key_data_points as a verbatim block the model must reproduce.
+
+    Drops kdps with placeholder values (n/a, TBD, unknown, etc.) so they don't
+    render as literal text in the image.
+    """
     pairs: list[str] = []
     for kdp in kdps[:limit]:
         label = (kdp.get("label") or "").strip()
         value = (kdp.get("value") or "").strip()
-        if label and value:
+        if label and _is_meaningful_value(value):
             pairs.append(f'"{value}" labeled "{label}"')
     return "; ".join(pairs)
 
@@ -169,6 +230,71 @@ def _format_key_data_points(kdps: list[dict[str, Any]], limit: int = 6) -> str:
 def _format_entities(entities: list[str]) -> str:
     """Strip @-prefixes and join for the prompt."""
     return ", ".join((e or "").lstrip("@").strip() for e in (entities or []) if e)
+
+
+def _pick_category_icon_hint(headline: str, brief: dict[str, Any]) -> str:
+    """Pick a single category-icon hint for iconic-mode prompts.
+
+    Used when there are no renderable stats. The model gets one clean motif
+    instead of being tempted to invent numbers.
+    """
+    h = (headline or "").lower()
+    angle = ((brief or {}).get("narrative_angle", "") or "").lower()
+    text = f"{h} {angle}"
+    if any(k in text for k in ("treasury", "treasuries", "t-bill", "treasury debt")):
+        return "Central motif: a stylized US Treasury seal or bond certificate, geometric and minimal."
+    if any(k in text for k in ("gold", "silver", "copper", "metal", "palladium", "platinum", "nickel")):
+        return "Central motif: a stylized metallic bar/ingot, geometric and minimal."
+    if any(k in text for k in ("oil", "gas", "energy", "brent", "wti")):
+        return "Central motif: a stylized oil-barrel or pipeline geometric icon, minimal."
+    if "commodit" in text:
+        return "Central motif: a stylized commodity-bar geometric icon, minimal."
+    if "real estate" in text or "reit" in text:
+        return "Central motif: a stylized skyline or building geometric icon, minimal."
+    if any(k in text for k in ("equity", "stock", "share class", "tranche")):
+        return "Central motif: a stylized share-certificate or ticker geometric icon, minimal."
+    if any(k in text for k in ("bond", "credit", "debt")):
+        return "Central motif: a stylized bond-certificate geometric icon, minimal."
+    if any(k in text for k in ("stablecoin", "usdc", "usdt", "usd1", "digital dollar", "money market")):
+        return "Central motif: a stylized digital-dollar coin geometric icon, minimal."
+    if any(k in text for k in ("private credit", "loan", "lending")):
+        return "Central motif: a stylized capital-flow geometric icon (arrow between two nodes), minimal."
+    return "Central motif: a simple geometric tokenization mark (linked nodes / registry seal), minimal."
+
+
+def _build_iconic_prompt(headline: str, entities: list[str], brief: dict[str, Any], aspect: str) -> str:
+    """Build a minimal iconic-mode prompt for briefs with no renderable stats.
+
+    The image is purely typographic + iconographic: cleaned headline, real
+    entity brand logos, one category icon. No stat slots, no invented numbers,
+    no 'N/A' text.
+    """
+    entity_list = _format_entities(entities)
+    icon_hint = _pick_category_icon_hint(headline, brief)
+    parts = [
+        (
+            f'Editorial financial infographic — iconic mode. Headline at the top, '
+            f'semibold, near-black, rendered legibly: "{headline}".'
+            if headline else
+            "Editorial financial infographic — iconic mode."
+        ),
+        (
+            f"Render the named entities alongside their ACTUAL official brand logos "
+            f"in their authentic brand colors (no generic icons): {entity_list}."
+            if entity_list else ""
+        ),
+        icon_hint,
+        (
+            "STRICT: do NOT render any numeric values, dashes, 'N/A', placeholder "
+            "stat blocks, or empty value fields. Do NOT invent numbers. The image "
+            "contains only the cleaned headline, the named entity logos, and one "
+            "category motif — nothing else. Composition is centered, generous "
+            "whitespace, no stat grid, no labeled-value rows."
+        ),
+        VISUAL_IDENTITY_SUFFIX,
+        f"{aspect} aspect ratio.",
+    ]
+    return " ".join(p for p in parts if p)
 
 
 def build_image_prompt(brief: dict[str, Any], format_hint: str) -> str:
@@ -179,14 +305,32 @@ def build_image_prompt(brief: dict[str, Any], format_hint: str) -> str:
     brand logos. The model knows logos for Tether, TRON, BlackRock, OFAC,
     Ethereum, etc. — telling it to render the authentic brand logos is the
     key unlock vs. generic icons.
+
+    When a brief has no renderable stats (all kdps are placeholders like
+    "n/a"), the prompt falls back to iconic mode — headline + entity logos
+    + one category motif, no stat slots. Rendering 'N/a' as literal text
+    is strictly worse than no stat at all.
     """
     brief = brief or {}
-    headline = (brief.get("headline") or "").strip()[:120]
-    kdps = brief.get("key_data_points") or []
+    raw_headline = (brief.get("headline") or "").strip()[:120]
+    headline = _clean_headline(raw_headline)
+    kdps_raw = brief.get("key_data_points") or []
+    # Drop placeholder-value kdps BEFORE layout selection so layout sizing
+    # matches the actual rendered content.
+    kdps = [
+        k for k in kdps_raw
+        if (k.get("label") or "").strip()
+        and _is_meaningful_value((k.get("value") or "").strip())
+    ]
     entities = brief.get("entities") or []
     aspect = MODEL_DEFAULTS.get(format_hint, ("gpt_image_2", "1:1", "image"))[1]
 
-    layout = pick_layout(brief, format_hint)
+    # No renderable stats → iconic mode (entity logos + category motif only).
+    if not kdps:
+        return _build_iconic_prompt(headline, entities, brief, aspect)
+
+    filtered_brief = {**brief, "key_data_points": kdps, "headline": headline}
+    layout = pick_layout(filtered_brief, format_hint)
     data_pairs = _format_key_data_points(kdps)
     entity_list = _format_entities(entities)
 
@@ -212,6 +356,11 @@ def build_image_prompt(brief: dict[str, Any], format_hint: str) -> str:
             "Solana, Polygon, Arbitrum, Optimism, Base, Avalanche), render its official "
             "logo and brand color. The image must read as if a Bloomberg or FT graphics "
             "desk produced it."
+        ),
+        (
+            "STRICT: do NOT render 'N/A', 'n/a', em-dash placeholders, or any value "
+            "field that wasn't explicitly provided above. If you can't fit a value "
+            "you weren't given, leave the slot off the page entirely."
         ),
         f"{aspect} aspect ratio.",
     ]
