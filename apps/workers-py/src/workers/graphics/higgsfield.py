@@ -65,26 +65,55 @@ def _env(name: str, default: str) -> str:
 
 # ---------- Prompt construction (pure, testable) ----------
 
-# Algo-refit visual identity. Higgsfield output is an INFOGRAPHIC that visually
-# reproduces the data and named entities discussed in the post body, NOT an
-# abstract metaphor that loosely connects to the message. Think Bloomberg
-# Terminal or a financial analyst's deck slide — typography-forward, structured
-# layout, labeled stats, real entity names rendered legibly.
+# Visual identity. The model frequently defaults to a dark-mode/wireframe
+# aesthetic when prompts are too prescriptive about "minimal" / "geometric"
+# layouts. The fix is to lead with the AESTHETIC explicitly (white background,
+# dark text, real logos) and reference the Bloomberg/FT template by name —
+# the model has strong priors on what those look like, and they look right.
 VISUAL_IDENTITY_SUFFIX = (
-    "Style: editorial financial infographic, minimal, light-mode. "
-    "Background near-white (#FAFAFA to #FFFFFF). Primary blue #1F6FEB used "
-    "sparingly for emphasis (one accent per block). Near-black #0F172A for "
-    "headline type, dark gray #64748B for labels. Geometric sans-serif "
-    "typography only (Inter or similar), tabular numbers, semibold for values, "
-    "regular for labels. No decorative fonts. No stock-photo finance clichés "
-    "(no piggy banks, no rising arrow with dollar sign, no robot handshakes, "
-    "no generic crypto art). No abstract concept illustration. The image is "
-    "a structured visual reproduction of the data and entities discussed in "
-    "the post — every labeled value and entity name in the text appears "
-    "legibly in the image. "
-    "Watermark '@jacksonblau' bottom-left, dark gray #64748B, 10pt. "
-    "Mood: analytical, sober, premium, dense without crowding."
+    "Visual style: solid white background (#FFFFFF). Solid near-black text "
+    "(#0F172A) for headlines and labels. Bright blue (#1F6FEB) only for "
+    "the headline numeric value or a single accent rule. Modern sans-serif "
+    "typeface throughout (clean and humanist, like Inter or SF Pro). "
+    "Headlines are bold and filled — NEVER outlined, NEVER wireframe, "
+    "NEVER hollow, NEVER ghost-stroked. Text must be SOLID FILL only. "
+    "Reference aesthetic: a Bloomberg Terminal card or a Financial Times "
+    "graphics-desk explainer. Crisp, premium, magazine-quality finance "
+    "graphic — NOT a sketch, NOT a wireframe, NOT a dark dashboard. "
+    "Watermark '@jacksonblau' bottom-left, small light gray (#94A3B8), 10pt."
 )
+
+# Major brands gpt-image-1 reliably renders with real logos (Tether's green T,
+# BlackRock's wordmark, the OFAC seal, TRON's diamond, JPMorgan's serif
+# wordmark, etc.). For these, ask for the authentic logo.
+_MAJOR_BRANDS = frozenset({
+    "tether", "blackrock", "jpmorgan", "j.p. morgan", "visa", "mastercard",
+    "ofac", "sec", "federal reserve", "fed", "us treasury", "treasury",
+    "tron", "ethereum", "bitcoin", "solana", "ripple", "coinbase", "paypal",
+    "binance", "kraken", "fidelity", "vanguard", "wisdomtree", "ishares",
+    "spdr", "invesco", "vaneck", "franklin templeton", "moody's", "s&p",
+    "fitch", "dtcc", "bnymellon", "bny mellon", "state street", "ubs",
+    "goldman sachs", "morgan stanley", "deutsche bank", "barclays", "hsbc",
+})
+
+
+def _split_known_vs_niche(entities: list[str]) -> tuple[list[str], list[str]]:
+    """Split entity list into (major-brand logos, niche-brand wordmarks).
+
+    Niche brands (Ondo, Pendle, Babylon, FalconX, etc.) get rendered as clean
+    typographic wordmarks in their brand color instead of invented graphic
+    logos — the model doesn't reliably know them and tends to fabricate.
+    """
+    major, niche = [], []
+    for raw in entities or []:
+        clean = (raw or "").lstrip("@").strip()
+        if not clean:
+            continue
+        if any(brand in clean.lower() for brand in _MAJOR_BRANDS):
+            major.append(clean)
+        else:
+            niche.append(clean)
+    return major, niche
 
 
 def pick_layout(brief: dict[str, Any], format_hint: str) -> str:
@@ -326,40 +355,38 @@ def _build_iconic_prompt(headline: str, entities: list[str], brief: dict[str, An
     """Build a minimal iconic-mode prompt for briefs with no renderable stats.
 
     The image is purely typographic + iconographic: cleaned headline, real
-    entity brand logos, one category icon. No stat slots, no invented numbers,
-    no 'N/A' text.
+    entity brand logos (for major brands) or wordmarks (for niche brands),
+    one category icon. No stat slots, no invented numbers, no 'N/A' text.
     """
-    entity_list = _format_entities(entities)
+    major_entities, niche_entities = _split_known_vs_niche(entities)
     icon_hint = _pick_category_icon_hint(headline, brief)
     parts = [
+        VISUAL_IDENTITY_SUFFIX,
         (
-            f'Editorial financial infographic — iconic mode. Headline at the top, '
-            f'semibold, near-black, rendered legibly: "{headline}".'
-            if headline else
-            "Editorial financial infographic — iconic mode."
+            f'Single centered headline, bold filled near-black sans-serif, '
+            f'three lines maximum: "{headline}".'
+            if headline else ""
         ),
         (
-            f"Render the named entities alongside their ACTUAL official brand logos "
-            f"in their authentic brand colors (no generic icons): {entity_list}."
-            if entity_list else ""
+            f"Render these MAJOR brands as their authentic official logos in "
+            f"correct brand color: {', '.join(major_entities)}."
+            if major_entities else ""
+        ),
+        (
+            f"For these niche/crypto-native brands, do NOT invent a graphic "
+            f"logo. Render the brand name as a clean lowercase wordmark in a "
+            f"simple sans-serif: {', '.join(niche_entities)}."
+            if niche_entities else ""
         ),
         icon_hint,
         (
-            "STRICT TEXT RULES — read carefully:\n"
-            "(1) Render ONLY the headline (exactly as given) and the named "
-            "entity logos. Nothing else, no exceptions.\n"
-            "(2) Do NOT render URLs, t.me/ paths, www.* links, or any "
-            "hyperlink-shaped text.\n"
-            "(3) Do NOT render any numeric values, percentages, dollar amounts, "
-            "or stat blocks. Do NOT invent numbers.\n"
-            "(4) Do NOT render 'N/A', em-dashes, or placeholder fields.\n"
-            "(5) Do NOT render paragraphs, bullet lists, body copy, or any "
-            "prose beyond the headline itself.\n"
-            "(6) Every glyph in the headline must be legible and spelled "
-            "correctly. If text won't fit cleanly, reduce its size; never "
-            "render hallucinated or partial characters.\n"
-            "Composition: centered, generous whitespace, single category motif, "
-            "real entity brand logos at correct scale."
+            "Strict rules: (1) text must be SOLID FILL, never outlined or "
+            "wireframe; (2) every glyph spelled correctly — if it won't fit, "
+            "shrink the surrounding layout; (3) NO numeric values, percentages, "
+            "or stat blocks anywhere; (4) NO URLs or hyperlink text; (5) NO "
+            "paragraphs or prose beyond the headline; (6) background is solid "
+            "white, never black or dark; (7) composition: centered, generous "
+            "whitespace, single category motif, no decorative borders."
         ),
         VISUAL_IDENTITY_SUFFIX,
         f"{aspect} aspect ratio.",
@@ -403,51 +430,52 @@ def build_image_prompt(brief: dict[str, Any], format_hint: str) -> str:
     if not kdps:
         return _build_iconic_prompt(headline, entities, brief, aspect)
 
-    filtered_brief = {**brief, "key_data_points": kdps, "headline": headline}
-    layout = pick_layout(filtered_brief, format_hint)
-    data_pairs = _format_key_data_points(kdps)
-    entity_list = _format_entities(entities)
+    # Cap at 3 data points. Beyond that the model has to shrink text so far
+    # that it loses legibility — that's where "Manaaer" / "Assnmodlties" /
+    # "Giobai" hallucinations come from. Tighter is better.
+    kdps = kdps[:3]
+    data_pairs = _format_key_data_points(kdps, limit=3)
+
+    major_entities, niche_entities = _split_known_vs_niche(entities)
 
     parts = [
-        f'Editorial financial infographic. Headline to render at the top, semibold, near-black: "{headline}".' if headline else "Editorial financial infographic.",
+        # LEAD with visual style — the model's prior on Bloomberg/FT style is
+        # what we want, so name it before any layout description.
+        VISUAL_IDENTITY_SUFFIX,
+        f'Headline at the top, bold filled near-black sans-serif, three lines maximum: "{headline}".' if headline else "",
         (
-            f"Render these exact labeled values verbatim, legibly, inside the layout: {data_pairs}."
+            f"Below the headline, render exactly these labeled values, each as a "
+            f"big bold filled number (use the bright blue accent for the headline "
+            f"figure) with its short label below: {data_pairs}."
             if data_pairs else ""
         ),
         (
-            f"Named entities to include alongside their ACTUAL official brand logos "
-            f"(use the authentic, recognizable brand marks for each — not generic icons; "
-            f"render in each entity's authentic brand colors): {entity_list}."
-            if entity_list else ""
-        ),
-        f"Layout: {layout}",
-        VISUAL_IDENTITY_SUFFIX,
-        (
-            "Each tier card pairs the entity's real brand logo on the left with the "
-            "text labels and numeric values on the right. Where a known regulator or "
-            "agency is referenced (OFAC, SEC, Fed, FSRA, FINRA), render the official "
-            "seal. Where a chain or protocol is referenced (Ethereum, TRON, Bitcoin, "
-            "Solana, Polygon, Arbitrum, Optimism, Base, Avalanche), render its official "
-            "logo and brand color. The image must read as if a Bloomberg or FT graphics "
-            "desk produced it."
+            f"For these MAJOR brands, render their authentic official logo in "
+            f"correct brand color and proportion: {', '.join(major_entities)}."
+            if major_entities else ""
         ),
         (
-            "STRICT TEXT RULES — read carefully:\n"
-            "(1) Render ONLY the exact labeled values and entity names provided "
-            "above. Do NOT invent, paraphrase, or extend any text.\n"
-            "(2) Do NOT render URLs, links, t.me/ paths, www.* domains, or any "
-            "hyperlink-shaped text. None of those belong in the image.\n"
-            "(3) Do NOT render paragraphs, bullet lists, multi-sentence body "
-            "copy, full news summaries, or any prose longer than a short stat "
-            "label. The image is a typography-first infographic, not a slide of "
-            "an article.\n"
-            "(4) Do NOT render 'N/A', 'n/a', em-dash placeholders, or empty "
-            "value fields. If a slot has no value, omit the slot entirely.\n"
-            "(5) Every glyph must be legible and spelled correctly — if a word "
-            "won't fit cleanly, drop it rather than render gibberish or "
-            "hallucinated characters.\n"
-            "(6) Numbers must match the provided values exactly. Do not "
-            "round, modify, or fabricate any numeric value."
+            f"For these niche/crypto-native brands, do NOT invent a graphic logo. "
+            f"Render the brand name as a clean lowercase wordmark in a simple "
+            f"sans-serif, in solid near-black or the brand's known accent color "
+            f"if widely recognized: {', '.join(niche_entities)}."
+            if niche_entities else ""
+        ),
+        # Single-card layout — way simpler than the previous prescriptive layouts.
+        (
+            "Composition: single centered card on the white background. "
+            "Generous whitespace. Two or three horizontal sections separated by "
+            "thin gray hairlines. No drop shadows. No gradients. No decorative "
+            "borders. No dark mode."
+        ),
+        # Compact strict-rules block.
+        (
+            "Strict rules: (1) text must be SOLID FILL, never outlined or "
+            "wireframe; (2) every glyph spelled correctly — if it won't fit, "
+            "shrink the surrounding card rather than render garbled text; "
+            "(3) no URLs, no paragraphs, no prose; (4) no 'N/A' or placeholder "
+            "values; (5) numeric values must match the provided values exactly; "
+            "(6) background is solid white, never black or dark."
         ),
         f"{aspect} aspect ratio.",
     ]
