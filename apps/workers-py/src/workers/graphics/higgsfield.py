@@ -164,6 +164,23 @@ _PLACEHOLDER_VALUES = frozenset({
     "unknown", "none", "null", "pending", "?", "??",
 })
 
+# Meta-labels from the story-builder that should NEVER appear as kdp slots in an
+# image. These are bookkeeping fields (the headline itself, source URLs, the
+# full Telegram message, etc.) — they aren't stat-shaped and the model can't
+# render paragraphs/URLs legibly. They live in the brief for OTHER purposes
+# (drafting the post body) but they're poison for the visual prompt.
+_META_LABELS = frozenset({
+    "headline", "full message", "source url", "source link",
+    "telegram url", "telegram link", "url", "link", "note",
+    "system", "internal", "raw", "raw text", "body", "summary",
+    "description", "article", "tweet", "message",
+})
+
+# Max kdp value length the model can render legibly at 1024px. The Tether
+# reference image's longest value is "OFAC RESPONSE WINDOW" (20 chars).
+# Anything longer than this becomes hallucinated glyph soup.
+_MAX_KDP_VALUE_LEN = 40
+
 
 def _is_meaningful_value(value: str) -> bool:
     """Return True if the value is a real datum we can render, not a placeholder.
@@ -179,6 +196,42 @@ def _is_meaningful_value(value: str) -> bool:
         return False
     # Catch compound placeholders: "$n/a", "n/a AUM", "USD n/a", etc.
     if "n/a" in v:
+        return False
+    return True
+
+
+def _is_renderable_kdp(label: str, value: str) -> bool:
+    """Return True only if (label, value) is short and stat-shaped enough to
+    render legibly in an infographic.
+
+    The model cannot render paragraphs, URLs, or long sentences cleanly at
+    1024x1024 — it hallucinates approximate-looking glyphs. The Tether gold-
+    standard image worked because every value was ≤20 chars and stat-shaped.
+    This filter enforces that discipline.
+    """
+    if not _is_meaningful_value(value):
+        return False
+    v = value.strip()
+    label_norm = (label or "").strip().lower()
+
+    # Meta-labels are bookkeeping fields, not stats
+    if label_norm in _META_LABELS:
+        return False
+    # Reject URLs outright (any scheme)
+    lower = v.lower()
+    if lower.startswith(("http://", "https://", "www.", "t.me/", "ftp://")):
+        return False
+    # Reject anything containing a URL token
+    if "://" in v or ".com/" in lower or ".xyz/" in lower or "t.me/" in lower:
+        return False
+    # Reject long values that won't render legibly
+    if len(v) > _MAX_KDP_VALUE_LEN:
+        return False
+    # Reject paragraphs (newlines) and markdown (bullets/headings/code/links)
+    if any(c in v for c in "\n\r*#`[]"):
+        return False
+    # Reject sentence-shaped values: ends in period AND has 4+ words
+    if v.endswith(".") and v.count(" ") >= 4:
         return False
     return True
 
@@ -215,14 +268,15 @@ def _clean_headline(headline: str) -> str:
 def _format_key_data_points(kdps: list[dict[str, Any]], limit: int = 6) -> str:
     """Render key_data_points as a verbatim block the model must reproduce.
 
-    Drops kdps with placeholder values (n/a, TBD, unknown, etc.) so they don't
-    render as literal text in the image.
+    Drops kdps that aren't stat-shaped and renderable (placeholders, URLs,
+    paragraphs, meta-labels, long sentences). Only short labeled values get
+    through — that's the Tether-gold-standard discipline.
     """
     pairs: list[str] = []
     for kdp in kdps[:limit]:
         label = (kdp.get("label") or "").strip()
         value = (kdp.get("value") or "").strip()
-        if label and _is_meaningful_value(value):
+        if _is_renderable_kdp(label, value):
             pairs.append(f'"{value}" labeled "{label}"')
     return "; ".join(pairs)
 
@@ -285,11 +339,21 @@ def _build_iconic_prompt(headline: str, entities: list[str], brief: dict[str, An
         ),
         icon_hint,
         (
-            "STRICT: do NOT render any numeric values, dashes, 'N/A', placeholder "
-            "stat blocks, or empty value fields. Do NOT invent numbers. The image "
-            "contains only the cleaned headline, the named entity logos, and one "
-            "category motif — nothing else. Composition is centered, generous "
-            "whitespace, no stat grid, no labeled-value rows."
+            "STRICT TEXT RULES — read carefully:\n"
+            "(1) Render ONLY the headline (exactly as given) and the named "
+            "entity logos. Nothing else, no exceptions.\n"
+            "(2) Do NOT render URLs, t.me/ paths, www.* links, or any "
+            "hyperlink-shaped text.\n"
+            "(3) Do NOT render any numeric values, percentages, dollar amounts, "
+            "or stat blocks. Do NOT invent numbers.\n"
+            "(4) Do NOT render 'N/A', em-dashes, or placeholder fields.\n"
+            "(5) Do NOT render paragraphs, bullet lists, body copy, or any "
+            "prose beyond the headline itself.\n"
+            "(6) Every glyph in the headline must be legible and spelled "
+            "correctly. If text won't fit cleanly, reduce its size; never "
+            "render hallucinated or partial characters.\n"
+            "Composition: centered, generous whitespace, single category motif, "
+            "real entity brand logos at correct scale."
         ),
         VISUAL_IDENTITY_SUFFIX,
         f"{aspect} aspect ratio.",
@@ -315,12 +379,16 @@ def build_image_prompt(brief: dict[str, Any], format_hint: str) -> str:
     raw_headline = (brief.get("headline") or "").strip()[:120]
     headline = _clean_headline(raw_headline)
     kdps_raw = brief.get("key_data_points") or []
-    # Drop placeholder-value kdps BEFORE layout selection so layout sizing
-    # matches the actual rendered content.
+    # Drop non-renderable kdps BEFORE layout selection so layout sizing
+    # matches the actual rendered content. Strict filter rejects URLs,
+    # paragraphs, meta-labels, sentences, and anything over 40 chars —
+    # the model can only render short stat-shaped values legibly.
     kdps = [
         k for k in kdps_raw
-        if (k.get("label") or "").strip()
-        and _is_meaningful_value((k.get("value") or "").strip())
+        if _is_renderable_kdp(
+            (k.get("label") or "").strip(),
+            (k.get("value") or "").strip(),
+        )
     ]
     entities = brief.get("entities") or []
     aspect = MODEL_DEFAULTS.get(format_hint, ("gpt_image_2", "1:1", "image"))[1]
@@ -358,9 +426,22 @@ def build_image_prompt(brief: dict[str, Any], format_hint: str) -> str:
             "desk produced it."
         ),
         (
-            "STRICT: do NOT render 'N/A', 'n/a', em-dash placeholders, or any value "
-            "field that wasn't explicitly provided above. If you can't fit a value "
-            "you weren't given, leave the slot off the page entirely."
+            "STRICT TEXT RULES — read carefully:\n"
+            "(1) Render ONLY the exact labeled values and entity names provided "
+            "above. Do NOT invent, paraphrase, or extend any text.\n"
+            "(2) Do NOT render URLs, links, t.me/ paths, www.* domains, or any "
+            "hyperlink-shaped text. None of those belong in the image.\n"
+            "(3) Do NOT render paragraphs, bullet lists, multi-sentence body "
+            "copy, full news summaries, or any prose longer than a short stat "
+            "label. The image is a typography-first infographic, not a slide of "
+            "an article.\n"
+            "(4) Do NOT render 'N/A', 'n/a', em-dash placeholders, or empty "
+            "value fields. If a slot has no value, omit the slot entirely.\n"
+            "(5) Every glyph must be legible and spelled correctly — if a word "
+            "won't fit cleanly, drop it rather than render gibberish or "
+            "hallucinated characters.\n"
+            "(6) Numbers must match the provided values exactly. Do not "
+            "round, modify, or fabricate any numeric value."
         ),
         f"{aspect} aspect ratio.",
     ]
