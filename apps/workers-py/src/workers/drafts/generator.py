@@ -29,6 +29,21 @@ BANNED_PATTERNS = [
     r"It bears mentioning",
 ]
 
+# OPENER VARIETY enforcement. The drafter keeps reaching for "I think" as the
+# first two words of every post, which reads as AI slop and triggers X's
+# repetition heuristics. "I think" mid-post is fine (the exemplars use it that
+# way); only the literal opener is banned. Add other formulaic openers here as
+# they emerge.
+BANNED_OPENERS = [
+    r"^I\s+think\b",
+    r"^Look,",
+    r"^Listen,",
+    r"^Here's\s+the\s+thing\b",
+    r"^So,",
+    r"^Honestly,",
+    r"^Let's\s+be\s+honest\b",
+]
+
 # "Punctuated contrast kicker" — a complete clause followed by a short fragment
 # that negates, contrasts with, or emphasizes the prior clause. One of the strongest
 # AI tells. See packages/prompts/voice.md for examples.
@@ -105,6 +120,22 @@ def check_no_leading_mention(text: str) -> list[str]:
     return []
 
 
+def check_opener_variety(text: str) -> list[str]:
+    """Reject drafts that open with a formulaic AI-slop phrase.
+
+    Only inspects the first non-empty line — mid-post usage of "I think" etc.
+    is intentional and matches the exemplars. The phrase is banned only as the
+    LITERAL opener of the post (or tweet 1 of a thread).
+    """
+    first_line = text.lstrip().split("\n", 1)[0].lstrip()
+    if not first_line:
+        return []
+    for pattern in BANNED_OPENERS:
+        if re.match(pattern, first_line, re.IGNORECASE):
+            return [f"banned_opener:'{first_line[:40]}...' — rotate to a different first-person frame"]
+    return []
+
+
 def regenerate_until_clean(
     generator_fn,
     *args,
@@ -137,6 +168,7 @@ def generate_single(story_brief: dict[str, Any]) -> dict[str, Any]:
         check_ai_tells(body)
         + check_source_attribution(body, source_handles)
         + check_no_leading_mention(body)
+        + check_opener_variety(body)
     )
     return {
         "format": "single",
@@ -193,6 +225,9 @@ def generate_thread(story_brief: dict[str, Any]) -> dict[str, Any]:
     # Tweet 1 must not start with @ (reach suppression). Subsequent tweets can.
     if tweets:
         for f in check_no_leading_mention(tweets[0]):
+            flags.append(f"tweet0:{f}")
+        # Opener variety only applies to tweet 1 — mid-thread "I think" is fine.
+        for f in check_opener_variety(tweets[0]):
             flags.append(f"tweet0:{f}")
     return {
         "format": "thread",
