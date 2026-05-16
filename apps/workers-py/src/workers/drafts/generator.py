@@ -257,20 +257,92 @@ def save_drafts_to_db(
 ) -> list[str]:
     """Insert generated drafts into the drafts table. Returns inserted ids.
 
-    If `brief` is provided, also dispatches graphics for each draft (via the
-    algo-refit graphics module) and inserts a row into media_assets per asset.
-    The dispatcher routes data-led briefs (with key_data_points) to the
-    canvas-design Ledger Cartography renderer, which uploads to Supabase
-    Storage and returns a public URL.
+    Order of operations matters: graphics are dispatched BEFORE the draft row
+    is inserted, so the post-graphics anti-AI check (`require_media=True`) and
+    the predicted-algo-score calculation can see the actual media_assets. The
+    computed values are then written into the same INSERT so the row lands on
+    the frontend's review queue with `ready_for_review` correctly populated.
+
+    If `brief` is None, graphics dispatch is skipped and ready_for_review will
+    be False (since the media-presence check will fail).
     """
     from .. import db
+    from . import anti_ai
+
+    # Load personal facts once for this batch. If absent we still save drafts —
+    # they just won't pass first_person/personal_facts checks.
+    try:
+        facts = anti_ai.load_personal_facts()
+    except anti_ai.PersonalFactsNotConfiguredError as e:
+        print(f"[warn] personal_facts.json not loaded: {e}")
+        facts = {}
+
     ids: list[str] = []
     with db.conn() as c, c.cursor() as cur:
         for d in drafts:
+            # 1) Dispatch graphics FIRST so the anti-AI checker sees media.
+            assets: list[dict[str, Any]] = []
+            if brief is not None:
+                try:
+                    from ..graphics import dispatch_for_draft
+                    assets = dispatch_for_draft({"format": d["format"]}, brief) or []
+                except Exception as e:  # noqa: BLE001
+                    print(f"[story={story_id} fmt={d['format']}] graphics dispatch failed: {type(e).__name__}: {e}")
+                    assets = []
+
+            # 2) Build a complete draft dict for anti-AI evaluation.
+            eval_draft = {
+                "format": d["format"],
+                "body": d.get("body", ""),
+                "body_json": d.get("body_json"),
+                "story_brief": brief or {},
+                "media_assets": assets,
+            }
+
+            # 3) Run the post-graphics anti-AI check and compute the algo score.
+            #    These populate the columns the frontend filters on.
+            try:
+                final_check = anti_ai.check_draft(eval_draft, facts=facts, require_media=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"[story={story_id} fmt={d['format']}] anti_ai.check_draft failed: {type(e).__name__}: {e}")
+                final_check = anti_ai.CheckResult(passed=False, rejections=[f"check_exception:{type(e).__name__}"])
+
+            try:
+                algo_score = anti_ai.predicted_algo_score(eval_draft)
+            except Exception as e:  # noqa: BLE001
+                print(f"[story={story_id} fmt={d['format']}] predicted_algo_score failed: {type(e).__name__}: {e}")
+                algo_score = 0
+
+            # Granular column values for the dashboard
+            first_person_passed = not any("missing_first_person_frame" in r for r in final_check.rejections)
+            personal_facts_passed = not any(
+                r.startswith(("unverified_personal_action", "unverified_position_claim", "off_limits_reference"))
+                for r in final_check.rejections
+            )
+            has_ready_media = any((m or {}).get("status") == "ready" for m in assets)
+            ready_for_review = bool(
+                final_check.passed
+                and (brief is None or has_ready_media)
+            )
+            # Merge generator-level ai_check_flags with any final-check flags
+            # so reviewers see the full story.
+            combined_flags = list(d.get("ai_check_flags") or []) + list(final_check.flags) + list(final_check.rejections)
+
+            # 4) Insert the draft with ALL the columns the frontend cares about.
             cur.execute(
                 """
-                insert into drafts (story_id, format, body, body_json, ai_check_passed, ai_check_flags, status)
-                values (%s::uuid, %s, %s, %s::jsonb, %s, %s, 'pending')
+                insert into drafts (
+                    story_id, format, body, body_json,
+                    ai_check_passed, ai_check_flags,
+                    first_person_check_passed, personal_facts_check_passed,
+                    predicted_algo_score, ready_for_review,
+                    status
+                )
+                values (%s::uuid, %s, %s, %s::jsonb,
+                        %s, %s,
+                        %s, %s,
+                        %s, %s,
+                        'pending')
                 returning id::text
                 """,
                 (
@@ -278,8 +350,12 @@ def save_drafts_to_db(
                     d["format"],
                     d["body"],
                     json.dumps(d.get("body_json")) if d.get("body_json") else None,
-                    d.get("ai_check_passed"),
-                    d.get("ai_check_flags") or [],
+                    bool(d.get("ai_check_passed")) and final_check.passed,
+                    combined_flags,
+                    first_person_passed,
+                    personal_facts_passed,
+                    int(algo_score),
+                    ready_for_review,
                 ),
             )
             row = cur.fetchone()
@@ -288,19 +364,8 @@ def save_drafts_to_db(
             draft_id = row[0]
             ids.append(draft_id)
 
-            # Algo-refit: dispatch graphics for this draft and persist any
-            # produced media_assets rows. Failures here are non-fatal — the
-            # draft still saves; the media row just isn't created.
-            if brief is None:
-                continue
-            try:
-                from ..graphics import dispatch_for_draft
-                draft_for_dispatch = {"format": d["format"], "id": draft_id}
-                assets = dispatch_for_draft(draft_for_dispatch, brief)
-            except Exception as e:  # noqa: BLE001
-                print(f"[draft={draft_id}] graphics dispatch failed: {type(e).__name__}: {e}")
-                continue
-            for asset in assets or []:
+            # 5) Persist the media_assets rows tied to the new draft_id.
+            for asset in assets:
                 try:
                     cur.execute(
                         """
