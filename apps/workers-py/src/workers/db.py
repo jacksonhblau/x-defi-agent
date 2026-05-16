@@ -81,15 +81,41 @@ def conn() -> Iterator[psycopg.Connection]:
         yield c
 
 
-def make_dedup_hash(source: str, entity: str | None, signal_type: str, payload: dict[str, Any]) -> str:
+def make_dedup_hash(
+    source: str,
+    entity: str | None,
+    signal_type: str,
+    payload: dict[str, Any],
+    source_id: str | None = None,
+) -> str:
     """Stable hash for deduplicating signals.
 
-    We hash a canonical JSON serialization of (source, entity, signal_type, payload)
-    so the same event from the same source produces the same hash regardless of
-    ingest time.
+    When the ingester provides a stable `source_id` (e.g. Telegram message_id,
+    RWA.xyz asset_id, an X tweet_id), we hash (source, signal_type, source_id)
+    — that uniquely identifies the underlying event without any volatile
+    payload fields. This was the original intent.
+
+    Previously this hashed the full payload, which broke for Telegram: each
+    poll fetched updated `views` and `forwards` counts, producing a different
+    hash for the same message every poll cycle (→ 3,500 duplicate rows for
+    56 actual messages).
+
+    When `source_id` is None we fall back to a stable subset of the payload
+    that excludes known volatile keys.
     """
+    if source_id:
+        canonical = json.dumps(
+            {"s": source, "t": signal_type, "sid": source_id},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+    # Fall back: strip known volatile keys from the payload before hashing.
+    VOLATILE_KEYS = {"views", "forwards", "retrieved_at", "fetched_at", "as_of", "ts"}
+    stable_payload = {k: v for k, v in (payload or {}).items() if k not in VOLATILE_KEYS}
     canonical = json.dumps(
-        {"s": source, "e": entity or "", "t": signal_type, "p": payload},
+        {"s": source, "e": entity or "", "t": signal_type, "p": stable_payload},
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -106,7 +132,7 @@ def insert_signal(
     source_id: str | None = None,
 ) -> str | None:
     """Insert a signal. Returns the row id, or None if it was a duplicate."""
-    dedup_hash = make_dedup_hash(source, entity, signal_type, payload)
+    dedup_hash = make_dedup_hash(source, entity, signal_type, payload, source_id=source_id)
     with conn() as c, c.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
