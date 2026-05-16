@@ -30,7 +30,11 @@ from typing import Any, Optional
 PERSONAL_FACTS_PATH_DEFAULT = Path(__file__).resolve().parents[4].parent / "config" / "personal_facts.json"
 
 # First-person pronouns / contractions that count as a "first-person frame".
-FIRST_PERSON_REGEX = re.compile(r"\b(I|I'm|I've|I'd|I'll|me|my|mine|myself)\b")
+# Case-insensitive so "My read on..." and "Me, I think..." (capitalized at the
+# start of a sentence) count. Without IGNORECASE, "My" failed the check because
+# the regex only matched lowercase "my" — which broke the voice-prompt-blessed
+# "My read on..." opener pattern.
+FIRST_PERSON_REGEX = re.compile(r"\b(I|I'm|I've|I'd|I'll|me|my|mine|myself)\b", re.IGNORECASE)
 
 # Verbs that, when used first-person, assert a real-world personal action.
 # Requires a matching entry in personal_facts.json's
