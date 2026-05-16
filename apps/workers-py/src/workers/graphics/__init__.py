@@ -28,18 +28,18 @@ from . import canva, canvas_design, higgsfield
 
 
 # ---------- Routing ----------
+#
+# Algo-refit final (May 16, 2026): Higgsfield (via OpenAI gpt-image-1) is the
+# sole image-generation path. The model knows authentic brand logos for the
+# entities we care about (Tether, BlackRock, TRON, Ethereum, OFAC, etc.) so
+# every plate gets contextual visual cues instead of generic monogram blocks.
+#
+# canvas_design and canva remain importable as fallbacks but the dispatcher
+# routes every kind to higgsfield by default.
 
 EDITORIAL_KIND = "editorial"
-
-# Data-led graphic kinds → Ledger Cartography (canvas_design).
-# Replaces the old Canva-template path (Jackson's call from the algo-refit Q&A).
-CANVAS_DESIGN_KINDS = {"data_card", "comparison", "leaderboard", "deploy_card"}
-
-# `time_series` still routes to Canva (queued) for now — the Ledger Cartography
-# renderer doesn't yet have a chart layout. Falls back gracefully.
-CANVA_FALLBACK_KINDS = {"time_series"}
-
-COMBO_KIND = "recap_grid"  # editorial hero + data plate combo
+COMBO_KIND = "recap_grid"
+TIME_SERIES_KIND = "time_series"
 
 
 def dispatch_for_draft(
@@ -50,50 +50,32 @@ def dispatch_for_draft(
 ) -> list[dict[str, Any]]:
     """Dispatch a draft to the right media backend(s) and return the produced assets.
 
-    Args:
-      draft: dict with at minimum 'format' (single|thread|reply|hot_take|long_form).
-      brief: story brief dict with 'graphic_kind', 'materiality_score',
-             'narrative_angle', 'key_data_points'.
-      video_materiality_floor: materiality threshold above which threads get
-             a Higgsfield video instead of a still image.
+    All graphic_kinds route to higgsfield.render() — the OpenAI-backed
+    infographic generator with real brand logo rendering. The brief's
+    graphic_kind influences the prompt's layout choice but not the backend.
 
     Returns:
-      list of MediaAsset dicts (one or two), each with at minimum:
-        kind: 'image' | 'video'
-        source: 'higgsfield' | 'canvas_design' | 'canva'
-        status: 'queued' | 'running' | 'ready' | 'failed'
-        storage_url: str (set when status == 'ready')
+      list of MediaAsset dicts (typically 1, occasionally 2 for high-materiality
+      threads that get a video hero + a still plate).
     """
     kind = (brief or {}).get("graphic_kind")
     if not kind:
-        # Smart default for v1 story builder which doesn't set graphic_kind:
-        # if the brief has key_data_points (named entities, real numbers), it's
-        # almost certainly a data-led post → render a Ledger Cartography plate.
-        # Falls back to editorial (Higgsfield) for hot-takes / pure-opinion posts.
         kind = "deploy_card" if ((brief or {}).get("key_data_points") or []) else EDITORIAL_KIND
     fmt = (draft or {}).get("format", "single")
     materiality = int((brief or {}).get("materiality_score", 0) or 0)
 
-    # Data-led posts → Ledger Cartography schematic plate (deterministic Python).
-    if kind in CANVAS_DESIGN_KINDS:
-        return [canvas_design.render(brief)]
-
-    # Time series (charts) — not yet covered by Ledger Cartography; keep Canva slot.
-    if kind in CANVA_FALLBACK_KINDS:
-        return [canva.render(brief)]
-
-    # Recap grid: data plate + editorial hero.
-    if kind == COMBO_KIND:
-        return [canvas_design.render(brief), higgsfield.render(brief, fmt)]
-
-    # High-materiality editorial thread: editorial hero + supporting data plate.
+    # High-materiality editorial thread: short video hero + still plate.
     if kind == EDITORIAL_KIND and materiality >= video_materiality_floor and fmt == "thread":
         return [
             higgsfield.render(brief, "hero_video"),
-            canvas_design.render(brief) if (brief or {}).get("key_data_points") else higgsfield.render(brief, fmt),
+            higgsfield.render(brief, fmt),
         ]
 
-    # Default editorial path: single Higgsfield asset matching the format.
+    # Recap grid: still plate + short video.
+    if kind == COMBO_KIND:
+        return [higgsfield.render(brief, fmt), higgsfield.render(brief, "hero_video")]
+
+    # Everything else: single Higgsfield image.
     return [higgsfield.render(brief, fmt)]
 
 

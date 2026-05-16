@@ -18,6 +18,7 @@ Or call render_plate(spec, out_path) from another module.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -489,20 +490,75 @@ def _initials(name: str) -> str:
     return name[:2].upper()
 
 
-def plate_from_brief(brief: dict) -> PlateSpec:
-    """Translate a story brief to a PlateSpec for the schematic plate.
+_STAT_VALUE_RE = re.compile(r"[\$%\d]")
+_BULLET_RE = re.compile(r"^[•\-\*]\s*(.+)$", re.MULTILINE)
 
-    Heuristic: tries to identify three tiers from key_data_points + entities:
-      - Top tier: the headline issuer/event with its primary value (Filed AUM, etc.)
-      - Middle tier: the operational role (Transfer Agent / Custodian / Manager)
-      - Bottom tier: the canonical chain or substrate
-    Plus up to 2 supporting figures from the remaining key_data_points.
+
+def _looks_like_stat(value: str) -> bool:
+    """A 'value' string is plate-worthy as a numeric/named-entity stat only when
+    short and containing a dollar/percent/digit. Otherwise it's probably
+    headline-shaped text we shouldn't render as a value (would overflow)."""
+    if not value:
+        return False
+    if len(value) > 40:
+        return False
+    return bool(_STAT_VALUE_RE.search(value))
+
+
+def _strip_markdown(s: str) -> str:
+    """Remove **bold**, *italic*, and stray markdown markers from a chunk of text."""
+    if not s:
+        return s
+    # Strip **bold** and *italic* wrappers (keep inner text)
+    s = re.sub(r"\*\*([^*]+)\*\*", r"\1", s)
+    s = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"\1", s)
+    # Strip any leftover stray asterisks
+    s = s.replace("**", "").replace("*", "")
+    # Markdown links [text](url) → text
+    s = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", s)
+    return s.strip()
+
+
+def _parse_bullets(text: str, max_bullets: int = 3) -> list[str]:
+    """Extract bullet points from a Telegram newsfeed message body, stripped of markdown."""
+    if not text:
+        return []
+    bullets = [_strip_markdown(b.strip()) for b in _BULLET_RE.findall(text)]
+    return [b for b in bullets if len(b) >= 20][:max_bullets]
+
+
+def _first_sentence(text: str, max_chars: int = 140) -> str:
+    """Pull the first sentence from a chunk of prose (after stripping markdown)."""
+    if not text:
+        return ""
+    # Strip leading **headline** markdown if present
+    text = re.sub(r"^\*\*[^*]+\*\*\s*", "", text.strip())
+    text = text.replace("\n", " ").strip()
+    # Truncate at first sentence boundary
+    for sep in [". ", "? ", "! "]:
+        idx = text.find(sep)
+        if 20 < idx < max_chars:
+            return text[: idx + 1]
+    return text[:max_chars].rstrip(",;: ") + ("…" if len(text) > max_chars else "")
+
+
+def plate_from_brief(brief: dict) -> PlateSpec:
+    """Translate a story brief to a PlateSpec.
+
+    Three branches based on the brief's shape:
+    1. **Structured deploy event** — entities AND `narrative_angle` contains
+       sovereignty/transfer-agent/canonical keywords → tier-hierarchy plate
+       (BlackRock-style).
+    2. **TVL / AUM update** — kdps include a `$`-denominated stat as the
+       primary value → single-stat callout with the named entity.
+    3. **Generic newsfeed item** — kdps include `Full message` (Telegram
+       newswire pattern) → bullet-list plate parsed from the message body.
     """
     headline = brief.get("headline") or "Untitled"
     kdps = brief.get("key_data_points") or []
     entities = [e.lstrip("@") for e in (brief.get("entities") or [])]
+    angle = (brief.get("narrative_angle") or "").lower()
 
-    # Find the labels of interest
     def _find(label_substring: str) -> Optional[dict]:
         ls = label_substring.lower()
         for kd in kdps:
@@ -510,85 +566,165 @@ def plate_from_brief(brief: dict) -> PlateSpec:
                 return kd
         return None
 
-    aum_kdp = _find("aum") or _find("filed") or (kdps[0] if kdps else None)
+    full_message_kdp = _find("full message") or _find("message")
+    aum_kdp = next(
+        (kd for kd in kdps
+         if _STAT_VALUE_RE.search(kd.get("value", "") or "")
+         and _looks_like_stat(kd.get("value", ""))
+         and not (kd.get("label", "") or "").lower().startswith(("source", "telegram", "url"))),
+        None,
+    )
     transfer_kdp = _find("transfer") or _find("agent") or _find("custodian")
     chain_kdp = _find("chain") or _find("ledger") or _find("substrate")
 
-    # Tier 1 — issuer
-    issuer_name = entities[0] if entities else "Unknown Issuer"
-    tiers = [
-        Tier(
+    is_deploy = bool(transfer_kdp or chain_kdp or
+                     any(k in angle for k in ("sovereign", "canonical", "transfer agent", "registrar")))
+    is_newsfeed = full_message_kdp is not None and not is_deploy
+
+    arrow_labels: list[str] = []
+    supporting: list[SupportingFigure] = []
+    tiers: list[Tier] = []
+
+    if is_newsfeed:
+        # ---- Newsfeed plate: 1 issuer-ish header tier + bullet tiers from the message body ----
+        bullets = _parse_bullets(full_message_kdp.get("value", ""))
+
+        # Publisher / source handle as the "issuer" for context
+        source_handles = brief.get("source_handles") or []
+        pub_handle = (source_handles[0] if source_handles else "").lstrip("@")
+        primary_entity = entities[0] if entities else (pub_handle or "Newsfeed")
+
+        # Lead tier: the named entity + short summary
+        summary = _first_sentence(full_message_kdp.get("value", "")) or headline
+        tiers.append(Tier(
+            name=primary_entity,
+            role_label=("VIA " + pub_handle.upper()) if pub_handle else "NEWSFEED ITEM",
+            value="",
+            value_label="",
+            description=summary,
+            initials=_initials(primary_entity),
+            accent=True,
+        ))
+        # Each bullet becomes a small follow-up tier (no big logo block; render
+        # as quiet stacked rows).
+        for i, b in enumerate(bullets):
+            short_label = "KEY POINT " + str(i + 1)
+            # truncate bullet to fit comfortably
+            text = b if len(b) <= 220 else b[:217].rstrip() + "…"
+            # Pull leading "Title sentence." as the tier's name if it's short
+            first_period = text.find(". ")
+            if 15 < first_period < 80:
+                tname = text[:first_period].strip()
+                tdesc = text[first_period + 2:].strip()
+            else:
+                tname = "—"
+                tdesc = text
+            tiers.append(Tier(
+                name=tname,
+                role_label=short_label,
+                value="",
+                value_label="",
+                description=tdesc,
+                initials=str(i + 1),
+                accent=False,
+            ))
+        # Arrow labels are visual continuation — quiet caps showing the read order.
+        for i in range(max(0, len(tiers) - 1)):
+            arrow_labels.append("·")
+
+    elif is_deploy:
+        # ---- Deploy-event plate (BlackRock-style hierarchy) ----
+        issuer_name = entities[0] if entities else "Unknown Issuer"
+        tiers.append(Tier(
             name=issuer_name,
             role_label="ISSUER · EVENT",
             value=(aum_kdp.get("value") if aum_kdp else "") or "",
-            value_label=(aum_kdp.get("label") if aum_kdp else "").upper(),
-            description=f"{issuer_name} files a tokenized money market fund onchain.",
+            value_label=(aum_kdp.get("label") if aum_kdp else "").upper() or "FILED AUM",
+            description=_first_sentence(headline),
             initials=_initials(issuer_name),
             accent=True,
-        ),
-    ]
+        ))
+        if transfer_kdp:
+            op_name = transfer_kdp.get("value") or "Transfer Agent"
+            tiers.append(Tier(
+                name=op_name,
+                role_label=(transfer_kdp.get("label") or "TRANSFER AGENT").upper(),
+                value="",
+                value_label="",
+                description="Maintains investor records and executes transfers, treating the L1 as canonical state.",
+                initials=_initials(op_name),
+            ))
+        if chain_kdp:
+            ch_name = chain_kdp.get("value") or "Ethereum"
+            tiers.append(Tier(
+                name=ch_name,
+                role_label=(chain_kdp.get("label") or "CANONICAL CHAIN").upper(),
+                value="",
+                value_label="",
+                description="L1 ledger that serves as the single, canonical state of token ownership.",
+                initials=_initials(ch_name),
+            ))
+        if len(tiers) >= 2:
+            arrow_labels.append("APPOINTS · DELEGATES AUTHORITY TO")
+        if len(tiers) >= 3:
+            arrow_labels.append("AUTHORITY OVER CANONICAL STATE")
 
-    # Tier 2 — operational role
-    if transfer_kdp:
-        op_name = transfer_kdp.get("value") or "Transfer Agent"
-        op_role = (transfer_kdp.get("label") or "TRANSFER AGENT").upper()
-        op_initials = _initials(op_name)
+        # Supporting figures: up to 2 other stat-shaped kdps
+        used = {(aum_kdp or {}).get("label"), (transfer_kdp or {}).get("label"), (chain_kdp or {}).get("label")}
+        for kd in kdps:
+            if kd.get("label") in used:
+                continue
+            v = kd.get("value", "")
+            if _looks_like_stat(v):
+                supporting.append(SupportingFigure(value=v, label=(kd.get("label") or "").upper()))
+                if len(supporting) >= 2:
+                    break
+
+    else:
+        # ---- TVL / AUM update plate: single stat callout ----
+        issuer_name = entities[0] if entities else (kdps[0].get("value", "") if kdps else "—")
+        # Find the primary numeric stat
+        primary = aum_kdp or next((kd for kd in kdps if _looks_like_stat(kd.get("value", ""))), None)
         tiers.append(Tier(
-            name=op_name,
-            role_label=op_role,
-            value="",
-            value_label="",
-            description="Maintains investor records and executes transfers, treating the L1 as canonical state.",
-            initials=op_initials,
+            name=issuer_name,
+            role_label="ISSUER · EVENT",
+            value=(primary.get("value") if primary else ""),
+            value_label=(primary.get("label") if primary else "").upper() or "CURRENT AUM",
+            description=_first_sentence(headline),
+            initials=_initials(issuer_name),
+            accent=True,
         ))
+        # Up to 2 other numeric stats become supporting figures
+        for kd in kdps:
+            if kd is primary:
+                continue
+            v = kd.get("value", "")
+            if _looks_like_stat(v):
+                supporting.append(SupportingFigure(value=v, label=(kd.get("label") or "").upper()))
+                if len(supporting) >= 2:
+                    break
 
-    # Tier 3 — canonical chain
-    if chain_kdp:
-        ch_name = chain_kdp.get("value") or "Ethereum"
-        ch_role = (chain_kdp.get("label") or "CANONICAL CHAIN").upper()
-        ch_initials = _initials(ch_name)
-        tiers.append(Tier(
-            name=ch_name,
-            role_label=ch_role,
-            value="",
-            value_label="",
-            description="L1 ledger that serves as the single, canonical state of token ownership.",
-            initials=ch_initials,
-        ))
+    # Section caps per story type
+    if is_newsfeed:
+        section_caps = "NEWSFEED · KEY POINTS"
+    elif is_deploy:
+        section_caps = "STRUCTURAL HIERARCHY"
+    else:
+        section_caps = "ASSET · CURRENT STATE"
 
-    # Arrow labels — operational verbs
-    arrow_labels: list[str] = []
-    if len(tiers) >= 2:
-        arrow_labels.append("APPOINTS · DELEGATES AUTHORITY TO")
-    if len(tiers) >= 3:
-        arrow_labels.append("AUTHORITY OVER CANONICAL STATE")
+    # Source line — prefer the actual publisher handle when available
+    source_handles = brief.get("source_handles") or []
+    if source_handles:
+        source_field = source_handles[0].lstrip("@").upper()
+    else:
+        source_field = (brief.get("source") or "PUBLIC FILING").upper()
 
-    # Supporting figures — up to 2 remaining numeric kdps
-    used_labels = {
-        (aum_kdp or {}).get("label"),
-        (transfer_kdp or {}).get("label"),
-        (chain_kdp or {}).get("label"),
-    }
-    supporting: list[SupportingFigure] = []
-    for kd in kdps:
-        if kd.get("label") in used_labels:
-            continue
-        v = kd.get("value", "")
-        if not v:
-            continue
-        supporting.append(SupportingFigure(
-            value=v, label=(kd.get("label") or "").upper(),
-        ))
-        if len(supporting) >= 2:
-            break
-
-    source_field = brief.get("source") or "PUBLIC FILING"
     return PlateSpec(
         headline=headline,
         plate_no="PLATE XXIV",
         figure_no="FIGURE I",
-        section_caps="STRUCTURAL HIERARCHY",
-        source_line=f"SOURCE · {source_field.upper()} · 2026",
+        section_caps=section_caps,
+        source_line=f"SOURCE · {source_field} · 2026",
         tiers=tiers,
         arrow_labels=arrow_labels,
         supporting_figures=supporting,

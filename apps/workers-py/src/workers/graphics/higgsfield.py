@@ -1,23 +1,33 @@
-"""Higgsfield image / video renderer.
+"""Higgsfield-style image renderer.
 
-Builds prompts for Higgsfield models, calls the MCP server (dev) or REST API
-(prod), polls until ready, applies the @jacksonblau watermark, uploads to
-Supabase Storage, and writes a `media_assets` row.
+Builds prompts and calls a backing image-generation model to produce
+editorial financial infographics for X posts. The aesthetic locked in is
+the "Tether v2" style: vertical-hierarchy infographic with the headline
+at the top, every labeled value from the brief rendered legibly, named
+entities accompanied by their ACTUAL brand logos, light-mode, single
+blue accent, @jacksonblau watermark.
 
-The MCP/REST client is plug-injected so the same module works in:
-- **Cowork dev** — Higgsfield MCP server (tools prefixed `mcp__39dcce27-…`).
-  The calling Claude session executes the MCP tools and passes the resulting
-  storage URL into `record_higgsfield_asset`.
-- **Production VPS** — Higgsfield REST API (`HIGGSFIELD_REST_URL`,
-  `HIGGSFIELD_API_KEY`). Implemented in `_HiggsfieldRESTClient`.
+Two backends are supported:
+- **OpenAI Images API direct** (production default). Calls `gpt-image-1`
+  via httpx with `OPENAI_API_KEY`. Same model that Higgsfield's
+  `gpt_image_2` wraps. ~$0.04 per medium 1024x1024 image.
+- **Higgsfield MCP** (dev / Cowork). The calling agent invokes the MCP
+  tool and writes the resulting URL via `record_higgsfield_asset`.
 
-See `docs/higgsfield_integration.md` for the full spec.
+The Module name kept as `higgsfield` for historical continuity even though
+the production path is OpenAI direct.
 """
 
 from __future__ import annotations
 
+import base64
+import logging
 import os
 from typing import Any, Optional, Protocol
+
+import httpx
+
+log = logging.getLogger(__name__)
 
 # ---------- Model selection table ----------
 
@@ -162,15 +172,16 @@ def _format_entities(entities: list[str]) -> str:
 
 
 def build_image_prompt(brief: dict[str, Any], format_hint: str) -> str:
-    """Compose a Higgsfield-ready infographic prompt for a story brief.
+    """Compose an infographic prompt for any story brief.
 
-    The prompt instructs the model to render an infographic that visually
-    reproduces the specific data, entities, and relationships in the brief —
-    not an abstract metaphor.
+    The "Tether v2" pattern (May 2026): vertical hierarchy infographic
+    rendering headline + labeled values + named entities with their actual
+    brand logos. The model knows logos for Tether, TRON, BlackRock, OFAC,
+    Ethereum, etc. — telling it to render the authentic brand logos is the
+    key unlock vs. generic icons.
     """
     brief = brief or {}
-    headline = (brief.get("headline") or "").strip()
-    angle = (brief.get("narrative_angle") or "tokenized RWA market dynamics").strip()
+    headline = (brief.get("headline") or "").strip()[:120]
     kdps = brief.get("key_data_points") or []
     entities = brief.get("entities") or []
     aspect = MODEL_DEFAULTS.get(format_hint, ("gpt_image_2", "1:1", "image"))[1]
@@ -180,15 +191,36 @@ def build_image_prompt(brief: dict[str, Any], format_hint: str) -> str:
     entity_list = _format_entities(entities)
 
     parts = [
-        f"Editorial financial infographic about: {angle}.",
-        f'Headline to render at the top, semibold, near-black: "{headline[:90]}".' if headline else "",
-        f"Render these exact labeled values verbatim, legibly, inside the layout: {data_pairs}." if data_pairs else "",
-        f"Named entities to include, rendered as text labels (no logos): {entity_list}." if entity_list else "",
+        f'Editorial financial infographic. Headline to render at the top, semibold, near-black: "{headline}".' if headline else "Editorial financial infographic.",
+        (
+            f"Render these exact labeled values verbatim, legibly, inside the layout: {data_pairs}."
+            if data_pairs else ""
+        ),
+        (
+            f"Named entities to include alongside their ACTUAL official brand logos "
+            f"(use the authentic, recognizable brand marks for each — not generic icons; "
+            f"render in each entity's authentic brand colors): {entity_list}."
+            if entity_list else ""
+        ),
         f"Layout: {layout}",
         VISUAL_IDENTITY_SUFFIX,
+        (
+            "Each tier card pairs the entity's real brand logo on the left with the "
+            "text labels and numeric values on the right. Where a known regulator or "
+            "agency is referenced (OFAC, SEC, Fed, FSRA, FINRA), render the official "
+            "seal. Where a chain or protocol is referenced (Ethereum, TRON, Bitcoin, "
+            "Solana, Polygon, Arbitrum, Optimism, Base, Avalanche), render its official "
+            "logo and brand color. The image must read as if a Bloomberg or FT graphics "
+            "desk produced it."
+        ),
         f"{aspect} aspect ratio.",
     ]
     return " ".join(p for p in parts if p)
+
+
+def build_infographic_prompt(brief: dict[str, Any]) -> str:
+    """Alias — the algo-refit canonical entry point for prompt construction."""
+    return build_image_prompt(brief, format_hint="single")
 
 
 def build_video_prompt(brief: dict[str, Any], format_hint: str) -> tuple[str, int]:
@@ -228,37 +260,78 @@ class HiggsfieldClient(Protocol):
         ...
 
 
-class _HiggsfieldRESTClient:
-    """Production REST client. Stub implementation — wire to Higgsfield Cloud
-    when the enterprise account is provisioned.
+class _OpenAIImagesClient:
+    """Production image-generation client. Calls OpenAI's `gpt-image-1`
+    directly via httpx — same model that Higgsfield's `gpt_image_2` wraps.
 
     Configuration via env:
-      HIGGSFIELD_REST_URL (default https://cloud.higgsfield.ai/api/v1)
-      HIGGSFIELD_API_KEY  (required for prod)
+      OPENAI_API_KEY      (required for prod)
+      OPENAI_IMAGE_MODEL  (default `gpt-image-1`)
+      OPENAI_IMAGE_QUALITY (default `medium`; options `low|medium|high`)
     """
 
-    def __init__(self, *, base_url: Optional[str] = None, api_key: Optional[str] = None):
-        self.base_url = base_url or _env("HIGGSFIELD_REST_URL", "https://cloud.higgsfield.ai/api/v1")
-        self.api_key = api_key or _env("HIGGSFIELD_API_KEY", "")
+    def __init__(self):
+        self.api_key = os.environ.get("OPENAI_API_KEY", "")
+        self.model = os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-1")
+        self.quality = os.environ.get("OPENAI_IMAGE_QUALITY", "medium")
 
     def generate_image(self, *, prompt: str, model: str, aspect: str) -> str:
-        raise NotImplementedError(
-            "Higgsfield REST client not yet wired. In Cowork/dev, render via the "
-            "Higgsfield MCP tools (mcp__39dcce27-…) and call record_higgsfield_asset() "
-            "with the resulting storage URL. In prod, wire this method to the "
-            "Higgsfield Cloud /jobs/image POST."
+        """Synchronously generate an image. Returns a local /tmp filename.
+
+        Unlike async APIs there's no job_id; the request blocks until the
+        image is ready (~10–30s). We write the bytes to /tmp and return that
+        path; the caller uploads to Supabase Storage.
+        """
+        if not self.api_key:
+            raise NotImplementedError(
+                "OPENAI_API_KEY not set. Add it to your env (locally) or to Fly "
+                "secrets (production): `fly secrets set OPENAI_API_KEY=sk-...`. "
+                "OpenAI gpt-image-1 is the same model Higgsfield's gpt_image_2 wraps."
+            )
+
+        size = {"1:1": "1024x1024", "16:9": "1536x1024", "9:16": "1024x1536"}.get(aspect, "1024x1024")
+
+        response = httpx.post(
+            "https://api.openai.com/v1/images/generations",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self.model,
+                "prompt": prompt[:32000],  # OpenAI prompt cap is generous
+                "n": 1,
+                "size": size,
+                "quality": self.quality,
+            },
+            timeout=90.0,
         )
+        response.raise_for_status()
+        data = response.json()
+        b64 = data["data"][0]["b64_json"]
+        png_bytes = base64.b64decode(b64)
+
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False, prefix="openai_img_") as f:
+            f.write(png_bytes)
+            return f.name
 
     def generate_video(self, *, prompt: str, model: str, aspect: str, duration_s: int) -> str:
-        raise NotImplementedError("Higgsfield REST video not yet wired — see generate_image note.")
+        raise NotImplementedError(
+            "Video generation not yet wired in production. Use Higgsfield MCP in "
+            "Cowork or wire Veo/Kling separately."
+        )
 
     def poll(self, *, job_id: str, timeout_s: int = 90) -> dict[str, Any]:
-        raise NotImplementedError("Higgsfield REST poll not yet wired — see generate_image note.")
+        # OpenAI Images is synchronous — generate_image returns the local path
+        # directly. This poll is a no-op compatibility shim.
+        return {"storage_url": job_id, "credits_used": 1}
 
 
-# Default client is REST. In Cowork sessions the agent overrides this by
-# manually executing the MCP tools and calling record_higgsfield_asset().
-_default_client: HiggsfieldClient = _HiggsfieldRESTClient()
+# Default client: OpenAI direct (production). In Cowork dev, the agent can
+# override by calling `record_higgsfield_asset` after manually running the
+# Higgsfield MCP tool.
+_default_client: HiggsfieldClient = _OpenAIImagesClient()
 
 
 def set_client(client: HiggsfieldClient) -> None:
@@ -308,23 +381,83 @@ def render(brief: dict[str, Any], format_hint: str = "single") -> dict[str, Any]
                 prompt=prompt, model=model_key, aspect=aspect, duration_s=duration_s or 8
             )
         else:
-            job_id = _default_client.generate_image(prompt=prompt, model=model_key, aspect=aspect)
+            # OpenAI client's generate_image returns a local /tmp PNG path.
+            local_path = _default_client.generate_image(prompt=prompt, model=model_key, aspect=aspect)
+            asset["status"] = "running"
+
+            # Upload to Supabase Storage so the Vercel UI can render the image.
+            import uuid as _uuid
+            from pathlib import Path
+            asset_id = str(_uuid.uuid4())
+            asset["id"] = asset_id
+
+            public_url = _upload_to_supabase_storage(Path(local_path), asset_id)
+            asset["storage_url"] = public_url or local_path
+            asset["local_path"] = local_path
+            asset["uploaded_to_supabase"] = public_url is not None
+            asset["status"] = "ready"
+            asset["credits_used"] = 1
+            return asset
+
+        # Video path (unchanged — async, polls)
         asset["higgsfield_job_id"] = job_id
         asset["status"] = "running"
         result = _default_client.poll(job_id=job_id, timeout_s=90)
         asset["status"] = "ready"
         asset["storage_url"] = result.get("storage_url", "")
         asset["credits_used"] = result.get("credits_used")
-    except NotImplementedError:
-        # Expected in Cowork/dev when the REST client is the default. The agent
+    except NotImplementedError as e:
+        # Expected in Cowork/dev when OPENAI_API_KEY is missing — the agent
         # is responsible for invoking the MCP tool and calling record_higgsfield_asset.
         asset["status"] = "queued"
-        asset["note"] = "REST client not wired — agent must dispatch via MCP and call record_higgsfield_asset()."
+        asset["note"] = f"Image client not wired: {e}"
     except Exception as e:  # noqa: BLE001
         asset["status"] = "failed"
         asset["error"] = str(e)
+        log.warning("higgsfield.render failed: %s", e)
 
     return asset
+
+
+# ---------- Supabase Storage upload (re-used from canvas_design pattern) ----------
+
+def _upload_to_supabase_storage(local_path, asset_id: str) -> Optional[str]:
+    """Upload the generated PNG to the public `media` bucket. Falls back to
+    None on any failure — caller will use the local path as storage_url so
+    the asset row still gets created.
+    """
+    supabase_url = os.environ.get("SUPABASE_URL")
+    service_key = (
+        os.environ.get("SUPABASE_SERVICE_KEY")
+        or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    )
+    bucket = os.environ.get("SUPABASE_MEDIA_BUCKET", "media")
+    if not (supabase_url and service_key):
+        return None
+    object_key = f"higgsfield/{asset_id}.png"
+    upload_url = f"{supabase_url.rstrip('/')}/storage/v1/object/{bucket}/{object_key}"
+    public_url = f"{supabase_url.rstrip('/')}/storage/v1/object/public/{bucket}/{object_key}"
+    try:
+        with open(local_path, "rb") as f:
+            body = f.read()
+        r = httpx.post(
+            upload_url,
+            content=body,
+            headers={
+                "Authorization": f"Bearer {service_key}",
+                "Content-Type": "image/png",
+                "x-upsert": "true",
+                "Cache-Control": "public, max-age=31536000, immutable",
+            },
+            timeout=30.0,
+        )
+        if r.status_code >= 400:
+            log.warning("Supabase upload failed (%s): %s", r.status_code, r.text[:200])
+            return None
+        return public_url
+    except Exception as e:  # noqa: BLE001
+        log.warning("Supabase upload exception: %s", e)
+        return None
 
 
 def record_higgsfield_asset(
