@@ -34,6 +34,11 @@ from . import config, db
 
 log = logging.getLogger(__name__)
 
+# Mirrors scheduler.MIN_GAP_MINUTES. Enforced in drain_due() so that catching
+# up a backlog (e.g., after a watch-loop outage) cannot fire multiple posts
+# back-to-back and tank engagement.
+MIN_GAP_MINUTES = 75
+
 _client: tweepy.Client | None = None
 _api_v1: tweepy.API | None = None
 
@@ -191,12 +196,35 @@ def _post_thread(tweets: list[str], *, media_ids: list[str] | None = None) -> li
 
 
 def drain_due() -> dict[str, int]:
-    """Post any scheduled drafts whose post_at has passed. Returns counts."""
+    """Post any scheduled drafts whose post_at has passed. Returns counts.
+
+    Engagement-aware: posts at most ONE draft per call, and only if at least
+    MIN_GAP_MINUTES have elapsed since the most recent successful post. This
+    prevents back-to-back firing when several scheduled rows have gone
+    overdue together (e.g., after a watch-loop outage), which X otherwise
+    reads as spam and suppresses distribution on.
+    """
     posted = 0
     failed = 0
     skipped = 0
 
     with db.conn() as c, c.cursor(row_factory=dict_row) as cur:
+        # Engagement gap guard: if the last successful post was within
+        # MIN_GAP_MINUTES, skip this cycle. The next cycle (60s later) will
+        # re-check; eventually the gap clears and the oldest queued row goes.
+        cur.execute("select max(posted_at) as last_posted from posts")
+        gap_row = cur.fetchone()
+        last_posted = gap_row["last_posted"] if gap_row else None
+        if last_posted is not None:
+            now = datetime.now(timezone.utc)
+            if last_posted.tzinfo is None:
+                last_posted = last_posted.replace(tzinfo=timezone.utc)
+            elapsed_s = (now - last_posted).total_seconds()
+            if elapsed_s < MIN_GAP_MINUTES * 60:
+                return {"posted": 0, "failed": 0, "skipped": 1}
+
+        # Limit 1, not 5: we only ever post a single draft per drain cycle.
+        # Anything else that's overdue waits until the gap above clears.
         cur.execute(
             """
             select sp.id::text as sp_id, sp.draft_id::text as draft_id, sp.attempts,
@@ -206,7 +234,7 @@ def drain_due() -> dict[str, int]:
             join drafts d on d.id = sp.draft_id
             where sp.status = 'queued' and sp.post_at <= now()
             order by sp.post_at asc
-            limit 5
+            limit 1
             """
         )
         due = cur.fetchall()
