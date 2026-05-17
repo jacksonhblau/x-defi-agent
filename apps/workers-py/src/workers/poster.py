@@ -7,22 +7,35 @@ For threads, posts each tweet in order with in_reply_to_tweet_id chaining.
 For replies, posts with in_reply_to_tweet_id set to the target tweet.
 For quote tweets, posts with quote_tweet_id set.
 
+Media: ready media_assets rows for the draft are uploaded to X via the v1.1
+media/upload endpoint (the only one X exposes for image upload), then
+attached to the FIRST tweet only (singles, thread tweet 1, reply, quote)
+via the v2 create_tweet media_ids param.
+
 Records to the posts and engagement tables on success.
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import os
+import tempfile
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
+import httpx
 import tweepy
 from psycopg.rows import dict_row
 
 from . import config, db
 
 
+log = logging.getLogger(__name__)
+
 _client: tweepy.Client | None = None
+_api_v1: tweepy.API | None = None
 
 
 def client() -> tweepy.Client:
@@ -41,13 +54,98 @@ def client() -> tweepy.Client:
     return _client
 
 
-def _post_single(text: str, *, reply_to: str | None = None, quote_id: str | None = None) -> str:
+def api_v1() -> tweepy.API:
+    """Tweepy v1.1 API client. Required for media/upload — X has not exposed
+    image upload via v2 yet, so we use OAuth 1.0a against v1.1."""
+    global _api_v1
+    if _api_v1 is None:
+        env = config.env()
+        auth = tweepy.OAuth1UserHandler(
+            env.x_api_key, env.x_api_secret,
+            env.x_access_token, env.x_access_secret,
+        )
+        _api_v1 = tweepy.API(auth)
+    return _api_v1
+
+
+def _upload_media_from_url(url: str) -> str | None:
+    """Download an image from `url` and upload to X. Returns media_id_string,
+    or None on any failure (so the post still goes out without media rather
+    than blocking publication entirely).
+    """
+    if not url or not isinstance(url, str):
+        return None
+    if not (url.startswith("http://") or url.startswith("https://")):
+        # Local path or unknown scheme — try direct upload if the file exists,
+        # otherwise skip.
+        if os.path.isfile(url):
+            try:
+                m = api_v1().media_upload(filename=url)
+                return getattr(m, "media_id_string", None) or str(getattr(m, "media_id", "")) or None
+            except Exception as e:  # noqa: BLE001
+                log.warning("media_upload local-path failed for %s: %s", url, e)
+                return None
+        return None
+
+    # Download to a temp file, upload, clean up.
+    tmp_path: str | None = None
+    try:
+        suffix = os.path.splitext(urlparse(url).path)[1] or ".png"
+        with httpx.stream("GET", url, timeout=30.0, follow_redirects=True) as r:
+            r.raise_for_status()
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False, prefix="x_media_") as f:
+                tmp_path = f.name
+                for chunk in r.iter_bytes(chunk_size=65536):
+                    f.write(chunk)
+        m = api_v1().media_upload(filename=tmp_path)
+        return getattr(m, "media_id_string", None) or str(getattr(m, "media_id", "")) or None
+    except Exception as e:  # noqa: BLE001
+        log.warning("media_upload from url failed for %s: %s", url, e)
+        return None
+    finally:
+        if tmp_path and os.path.isfile(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+def _fetch_media_urls_for_draft(draft_id: str, max_images: int = 4) -> list[str]:
+    """Return up to `max_images` ready media storage_urls for this draft.
+    X allows up to 4 images per tweet.
+    """
+    with db.conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            select storage_url
+            from media_assets
+            where draft_id = %s::uuid
+              and status = 'ready'
+              and storage_url is not null
+              and kind in ('image', 'still')
+            order by created_at asc
+            limit %s
+            """,
+            (draft_id, max_images),
+        )
+        return [r[0] for r in cur.fetchall() if r[0]]
+
+
+def _post_single(
+    text: str,
+    *,
+    reply_to: str | None = None,
+    quote_id: str | None = None,
+    media_ids: list[str] | None = None,
+) -> str:
     """Post one tweet. Returns the tweet id."""
     kwargs: dict[str, Any] = {"text": text}
     if reply_to:
         kwargs["in_reply_to_tweet_id"] = reply_to
     if quote_id:
         kwargs["quote_tweet_id"] = quote_id
+    if media_ids:
+        kwargs["media_ids"] = media_ids
     resp = client().create_tweet(**kwargs)
     if not resp or not resp.data:
         raise RuntimeError(f"X API returned no data: {resp}")
@@ -69,8 +167,12 @@ def _assert_no_leading_mention(text: str) -> None:
         )
 
 
-def _post_thread(tweets: list[str]) -> list[str]:
-    """Post a thread as a chain of replies. Returns all tweet ids in order."""
+def _post_thread(tweets: list[str], *, media_ids: list[str] | None = None) -> list[str]:
+    """Post a thread as a chain of replies. Returns all tweet ids in order.
+
+    Media attaches to the FIRST tweet only — subsequent thread tweets are
+    text-only replies. This matches X's convention for thread hero plates.
+    """
     if not tweets:
         raise RuntimeError("Refusing to post: thread has zero tweets")
     # Only the FIRST tweet of a thread must not start with @ — subsequent
@@ -79,8 +181,10 @@ def _post_thread(tweets: list[str]) -> list[str]:
     _assert_no_leading_mention(tweets[0])
     ids: list[str] = []
     reply_to: str | None = None
-    for t in tweets:
-        tid = _post_single(t, reply_to=reply_to)
+    for i, t in enumerate(tweets):
+        # Media on tweet 1 only.
+        per_tweet_media = media_ids if i == 0 else None
+        tid = _post_single(t, reply_to=reply_to, media_ids=per_tweet_media)
         ids.append(tid)
         reply_to = tid
     return ids
@@ -120,15 +224,24 @@ def drain_due() -> dict[str, int]:
             c.commit()
 
         try:
+            # Fetch + upload any ready media for this draft. If uploads fail
+            # we proceed without media rather than blocking publication.
+            media_urls = _fetch_media_urls_for_draft(draft_id)
+            media_ids: list[str] = []
+            for url in media_urls:
+                mid = _upload_media_from_url(url)
+                if mid:
+                    media_ids.append(mid)
+
             if row["format"] == "thread":
                 tweets = row["body_json"] if isinstance(row["body_json"], list) else json.loads(row["body_json"])
-                tweet_ids = _post_thread(tweets)
+                tweet_ids = _post_thread(tweets, media_ids=media_ids or None)
             elif row["format"] in ("single", "hot_take"):
-                tweet_ids = [_post_single(row["effective_body"])]
+                tweet_ids = [_post_single(row["effective_body"], media_ids=media_ids or None)]
             elif row["format"] == "reply":
-                tweet_ids = [_post_single(row["effective_body"], reply_to=row["reply_to_tweet_id"])]
+                tweet_ids = [_post_single(row["effective_body"], reply_to=row["reply_to_tweet_id"], media_ids=media_ids or None)]
             elif row["format"] == "quote_tweet":
-                tweet_ids = [_post_single(row["effective_body"], quote_id=row["quote_tweet_id"])]
+                tweet_ids = [_post_single(row["effective_body"], quote_id=row["quote_tweet_id"], media_ids=media_ids or None)]
             else:
                 raise RuntimeError(f"Unknown draft format: {row['format']}")
 
