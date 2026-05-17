@@ -115,9 +115,14 @@ def _upload_media_from_url(url: str) -> str | None:
                 pass
 
 
-def _fetch_media_urls_for_draft(draft_id: str, max_images: int = 4) -> list[str]:
-    """Return up to `max_images` ready media storage_urls for this draft.
-    X allows up to 4 images per tweet.
+def _fetch_media_urls_for_draft(draft_id: str, max_images: int = 1) -> list[str]:
+    """Return up to `max_images` ready media storage_urls for this draft,
+    newest first.
+
+    Posts use only the MOST RECENT ready media asset. Regenerating a graphic
+    (which inserts a new media_assets row) should supersede prior renders —
+    attaching the whole history dilutes the hero image and tanks engagement.
+    X allows up to 4 images per tweet; we cap at 1 by policy, not capacity.
     """
     with db.conn() as c, c.cursor() as cur:
         cur.execute(
@@ -128,7 +133,7 @@ def _fetch_media_urls_for_draft(draft_id: str, max_images: int = 4) -> list[str]
               and status = 'ready'
               and storage_url is not null
               and kind in ('image', 'still')
-            order by created_at asc
+            order by created_at desc
             limit %s
             """,
             (draft_id, max_images),
