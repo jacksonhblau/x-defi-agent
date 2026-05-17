@@ -3,7 +3,7 @@
 import { useRouter } from 'next/navigation'
 import { useTransition, useMemo } from 'react'
 import { ExternalLink } from 'lucide-react'
-import { format, parseISO, isToday, isTomorrow, startOfDay, differenceInCalendarDays } from 'date-fns'
+import { parseISO } from 'date-fns'
 import { truncate } from '@/lib/utils'
 import type { ScheduledPost } from '@/lib/types'
 import { StatusBadge } from '@/components/status-badge'
@@ -14,17 +14,57 @@ interface CalendarClientProps {
   initialPosts: ScheduledPost[]
 }
 
+// All calendar rendering is anchored to America/New_York ("ET"), regardless of
+// the viewer's browser timezone. post_at is stored as UTC; we convert to ET
+// for both grouping (which day a post belongs to) and display.
+const ET_TZ = 'America/New_York'
+
+/** YYYY-MM-DD key for the ET-local calendar day containing `date`. */
+function etDateKey(date: Date): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: ET_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date)
+}
+
 function dayLabel(dateStr: string): string {
   const date = parseISO(dateStr)
-  if (isToday(date)) return 'Today'
-  if (isTomorrow(date)) return 'Tomorrow'
-  const diff = differenceInCalendarDays(date, new Date())
-  if (diff < 0) return format(date, 'EEE MMM d') + ' (past)'
-  return format(date, 'EEEE, MMM d')
+  const dayKey = etDateKey(date)
+  const todayKey = etDateKey(new Date())
+  const tomorrowKey = etDateKey(new Date(Date.now() + 24 * 60 * 60 * 1000))
+  if (dayKey === todayKey) return 'Today'
+  if (dayKey === tomorrowKey) return 'Tomorrow'
+
+  const inPast = dayKey < todayKey
+  const long = new Intl.DateTimeFormat('en-US', {
+    timeZone: ET_TZ,
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric',
+  }).format(date)
+  if (inPast) {
+    const short = new Intl.DateTimeFormat('en-US', {
+      timeZone: ET_TZ,
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+    }).format(date)
+    return `${short} (past)`
+  }
+  return long
 }
 
 function formatTime(dateStr: string): string {
-  return format(parseISO(dateStr), 'h:mm a') + ' ET'
+  return (
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: ET_TZ,
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }).format(parseISO(dateStr)) + ' ET'
+  )
 }
 
 export function CalendarClient({ initialPosts }: CalendarClientProps) {
@@ -35,7 +75,9 @@ export function CalendarClient({ initialPosts }: CalendarClientProps) {
   const days = useMemo(() => {
     const map = new Map<string, ScheduledPost[]>()
     for (const post of initialPosts) {
-      const day = startOfDay(parseISO(post.post_at)).toISOString()
+      // Bucket by the ET-local calendar day so a post at "Sat 11:09 PM ET"
+      // doesn't drift into Sunday when viewed from a non-ET browser.
+      const day = etDateKey(parseISO(post.post_at))
       const arr = map.get(day) ?? []
       arr.push(post)
       map.set(day, arr)

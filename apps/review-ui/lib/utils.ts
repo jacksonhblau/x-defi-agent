@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from 'clsx'
 import { twMerge } from 'tailwind-merge'
-import { formatDistanceToNow, format, parseISO } from 'date-fns'
+import { formatDistanceToNow, parseISO } from 'date-fns'
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -16,11 +16,24 @@ export function relativeTime(dateStr: string | null): string {
   }
 }
 
-export function formatET(dateStr: string | null, fmt = 'EEE h:mm a'): string {
+const ET_TZ = 'America/New_York'
+
+// All "ET"-labeled timestamps in the UI must be rendered in America/New_York
+// regardless of the viewer's browser locale. date-fns `format` uses the
+// browser's local TZ, so we use Intl.DateTimeFormat with an explicit timeZone.
+export function formatET(dateStr: string | null, _fmt = 'EEE h:mm a'): string {
   if (!dateStr) return '—'
   try {
     const date = typeof dateStr === 'string' ? parseISO(dateStr) : new Date(dateStr)
-    return format(date, fmt) + ' ET'
+    return (
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: ET_TZ,
+        weekday: 'short',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      }).format(date) + ' ET'
+    )
   } catch {
     return '—'
   }
@@ -30,7 +43,17 @@ export function formatDateET(dateStr: string | null): string {
   if (!dateStr) return '—'
   try {
     const date = typeof dateStr === 'string' ? parseISO(dateStr) : new Date(dateStr)
-    return format(date, 'EEE MMM d, h:mm a') + ' ET'
+    return (
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: ET_TZ,
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      }).format(date) + ' ET'
+    )
   } catch {
     return '—'
   }
