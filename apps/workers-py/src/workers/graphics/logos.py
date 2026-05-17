@@ -104,6 +104,37 @@ MODEL_KNOWN_BRANDS: dict[str, str] = {
     "s&p": "S&P",
     "fitch": "Fitch",
     "dtcc": "DTCC",
+    # DeFi protocols the model renders reliably (their identities are
+    # well-established in crypto-native training data).
+    "aave": "Aave",
+    "uniswap": "Uniswap",
+    "makerdao": "MakerDAO",
+    "maker": "MakerDAO",
+    "lido": "Lido",
+    "ethena": "Ethena",
+    "pendle": "Pendle",
+    "morpho": "Morpho",
+    "sky": "Sky",
+    "backed": "Backed",
+    # Banks / asset managers commonly cited in the watchlist
+    "amundi": "Amundi",
+    "spiko": "Spiko",
+    "anchorage": "Anchorage Digital",
+    "anchoragedigital": "Anchorage Digital",
+    "okx": "OKX",
+    "standardchartered": "Standard Chartered",
+    "standard chartered": "Standard Chartered",
+    "hsbc": "HSBC",
+    # Chains
+    "polygon": "Polygon",
+    "arbitrum": "Arbitrum",
+    "optimism": "Optimism",
+    "base": "Base",
+    "avalanche": "Avalanche",
+    "sui": "Sui",
+    "aptos": "Aptos",
+    "monad": "Monad",
+    "near": "NEAR",
 }
 
 
@@ -251,29 +282,75 @@ def _scan_local_bundle() -> dict[str, Path]:
 
 
 def _try_tier1(entity: str, bundle: dict[str, Path]) -> Optional[Path]:
-    """Match the entity against the local bundle."""
+    """Match the entity against the local bundle.
+
+    Three-stage match, each more tolerant than the last:
+      1. Exact slug match ('blackrock' == 'blackrock')
+      2. Token match: split the entity on punctuation/underscores/case
+         boundaries and check if any token matches a bundle slug exactly.
+         Handles 'backed_fi' → 'backed', 'CircleConsumer' → 'circle',
+         'vaneck_us' → 'vaneck'.
+      3. Substring containment with a length-aware guard. The guard
+         requires the matched bundle slug to be at least 4 chars to
+         avoid 1-2 letter false positives ('us' shouldn't match
+         every entity with 'us' in it).
+    """
     s = _slug(entity)
     if s in bundle:
         return bundle[s]
-    # Loose match: try entity slug as substring (handles "BNY Mellon" vs "bnymellon.svg")
+
+    # Token match. Split on the original (pre-slug) so we keep word boundaries
+    # that _slug() would have erased.
+    raw = (entity or "").lstrip("@").strip()
+    tokens: list[str] = []
+    # Split on punctuation, whitespace, and case boundaries.
+    parts = re.split(r"[^A-Za-z0-9]+", raw)
+    for p in parts:
+        if not p:
+            continue
+        # Camel-case split: 'CircleConsumer' → ['Circle', 'Consumer']
+        camel_split = re.findall(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+", p)
+        tokens.extend(camel_split or [p])
+    seen: set[str] = set()
+    for tok in tokens:
+        tslug = tok.lower()
+        if not tslug or tslug in seen:
+            continue
+        seen.add(tslug)
+        if len(tslug) >= 4 and tslug in bundle:
+            return bundle[tslug]
+
+    # Substring containment, length-guarded.
     for slug, path in bundle.items():
-        if slug and (slug in s or s in slug):
-            if abs(len(slug) - len(s)) <= 4:  # avoid spurious one-letter overlaps
-                return path
+        if slug and len(slug) >= 4 and (slug in s or s in slug):
+            return path
     return None
 
 
 # ---------- Tier 2: Brandfetch / Clearbit CDN ----------
 
 def _infer_domain(entity: str) -> Optional[str]:
-    """Look up a domain from the manual map, with light fuzzy matching."""
+    """Look up a domain from the manual map.
+
+    Tries: exact slug, whitespace-preserved lowercase, and token match
+    on punctuation/case boundaries. This is how 'CircleConsumer' finds
+    Circle's domain and 'Fidelity Digital Interest Token' finds Fidelity.
+    """
     s = _slug(entity)
     if s in ENTITY_DOMAINS:
         return ENTITY_DOMAINS[s]
-    # Try whitespace-preserved key
     lower = (entity or "").lstrip("@").strip().lower()
     if lower in ENTITY_DOMAINS:
         return ENTITY_DOMAINS[lower]
+    # Token match — see _try_tier1 for the tokenizer rationale.
+    raw = (entity or "").lstrip("@").strip()
+    parts = re.split(r"[^A-Za-z0-9]+", raw)
+    for p in parts:
+        camel = re.findall(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+", p) or [p]
+        for tok in camel:
+            tslug = tok.lower()
+            if len(tslug) >= 4 and tslug in ENTITY_DOMAINS:
+                return ENTITY_DOMAINS[tslug]
     return None
 
 
@@ -407,6 +484,23 @@ def resolve_entity(
             tier="tier3_model_knowledge",
             note="ask the model to render the authentic logo from training",
         )
+    # Token-aware match for compound entity names ('CircleConsumer' →
+    # 'circle', 'okx_official' → 'okx'). Length threshold is 3 here
+    # rather than 4 because dictionary membership is the real specificity
+    # check — 3-letter known brands (SEC, FED, OFAC, OKX) are real entries.
+    raw = (entity or "").lstrip("@").strip()
+    parts = re.split(r"[^A-Za-z0-9]+", raw)
+    for p in parts:
+        camel = re.findall(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+", p) or [p]
+        for tok in camel:
+            tslug = tok.lower()
+            if len(tslug) >= 3 and tslug in MODEL_KNOWN_BRANDS:
+                return LogoResolution(
+                    entity=entity,
+                    canonical_name=MODEL_KNOWN_BRANDS[tslug],
+                    tier="tier3_model_knowledge",
+                    note=f"token match: '{tslug}' (from compound entity)",
+                )
 
     # ---- Tier 4 ----
     return LogoResolution(
