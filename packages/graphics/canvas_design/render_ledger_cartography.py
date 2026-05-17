@@ -29,6 +29,90 @@ from PIL import Image, ImageDraw, ImageFont
 
 # ---------- Paths ----------
 
+# The local SVG logo bundle lives at packages/graphics/logos/issuers/.
+# When a tier's entity name matches a slug in the bundle (case-insensitive,
+# punctuation-insensitive), the renderer composites the real logo into the
+# tier card instead of drawing a monogram block. Falls back to monogram if
+# the SVG → PNG rasterizer (cairosvg) isn't available or the file is broken.
+
+def _logos_dir() -> Path:
+    """Locate the local issuer SVG bundle."""
+    here = Path(__file__).resolve()
+    # repo dev path: <repo>/packages/graphics/logos/issuers/
+    candidates = [
+        Path("/app/packages/graphics/logos/issuers"),
+        here.parents[2] / "logos" / "issuers",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return candidates[-1]
+
+
+_LOGO_INDEX_CACHE: Optional[dict[str, Path]] = None
+
+
+def _build_logo_index() -> dict[str, Path]:
+    """slug -> Path index over the bundle, cached for the process."""
+    global _LOGO_INDEX_CACHE
+    if _LOGO_INDEX_CACHE is not None:
+        return _LOGO_INDEX_CACHE
+    out: dict[str, Path] = {}
+    d = _logos_dir()
+    if d.exists():
+        for p in d.iterdir():
+            if p.suffix.lower() in (".svg", ".png") and not p.name.startswith("."):
+                out[_normalize_slug(p.stem)] = p
+    _LOGO_INDEX_CACHE = out
+    return out
+
+
+def _normalize_slug(name: str) -> str:
+    """Lowercase, alpha-numeric-only slug for fuzzy logo matching."""
+    s = (name or "").lstrip("@").strip().lower()
+    return "".join(ch for ch in s if ch.isalnum())
+
+
+def _find_logo_file(entity_name: str) -> Optional[Path]:
+    """Return the bundle Path for an entity, or None if no match."""
+    idx = _build_logo_index()
+    s = _normalize_slug(entity_name)
+    if not s:
+        return None
+    if s in idx:
+        return idx[s]
+    # Loose substring match for near-misses (e.g., "BNY Mellon" vs "bnymellon.svg")
+    for slug, path in idx.items():
+        if slug and (slug in s or s in slug) and abs(len(slug) - len(s)) <= 4:
+            return path
+    return None
+
+
+def _rasterize_to_pil(svg_or_png_path: Path, size: int) -> Optional[Image.Image]:
+    """Rasterize an SVG (or load a PNG) into a PIL Image at `size`×`size`.
+
+    Uses cairosvg if available; returns None if the dep isn't installed or
+    the file can't be rendered. Callers must fall back to monogram drawing.
+    """
+    if not svg_or_png_path.exists():
+        return None
+    try:
+        if svg_or_png_path.suffix.lower() == ".png":
+            img = Image.open(svg_or_png_path).convert("RGBA")
+            return img.resize((size, size), Image.LANCZOS)
+        import cairosvg  # type: ignore
+        import io
+        png_bytes = cairosvg.svg2png(
+            url=str(svg_or_png_path),
+            output_width=size,
+            output_height=size,
+            background_color=None,
+        )
+        return Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+    except Exception:
+        return None
+
+
 # Bundled fonts ship with the project (under packages/graphics/canvas_design/fonts/)
 # so the Docker image on Fly has them too. Override via CANVAS_DESIGN_FONTS_DIR env
 # var if you need to point at a different font directory in dev.
@@ -154,12 +238,36 @@ def _draw_logo_block(
     fill: tuple[int, int, int] = INK_BLUE,
     text_fill: tuple[int, int, int] = PAPER,
     font: Optional[ImageFont.FreeTypeFont] = None,
+    *,
+    entity_name: Optional[str] = None,
+    base_image: Optional[Image.Image] = None,
 ) -> None:
-    """Render a square monogram block with initials. Replaces SVG logos for v1.
+    """Render a logo block at (x, y) of side `size`.
 
-    Auto-sizes the font based on initial length so 3-4 char tickers (ETH, AVAX)
-    still fit cleanly in the same square as 2-char initials (BR, BM).
+    Resolution order:
+      1. If `entity_name` matches a file in the local SVG bundle AND we can
+         rasterize it AND `base_image` is provided, composite the real logo
+         onto the image. This is the Tether-tier visual.
+      2. Otherwise fall back to a colored monogram with letter initials.
+
+    `initials` is always used as the fallback. `base_image` must be the PIL
+    Image being drawn onto — needed because compositing requires Image.paste,
+    not the ImageDraw context. The renderer passes it through.
     """
+    # ---- Tier 1: composite the real logo ----
+    if entity_name and base_image is not None:
+        logo_path = _find_logo_file(entity_name)
+        if logo_path is not None:
+            raster = _rasterize_to_pil(logo_path, size)
+            if raster is not None:
+                # White rounded background tile so colored logos with no
+                # built-in plate still read clearly.
+                tile = Image.new("RGBA", (size, size), (250, 250, 250, 255))
+                tile.paste(raster, (0, 0), raster)
+                base_image.paste(tile, (x, y), tile)
+                return
+
+    # ---- Tier 2: monogram fallback ----
     try:
         draw.rounded_rectangle(
             (x, y, x + size, y + size),
@@ -344,6 +452,8 @@ def render_plate(
             draw, logo_x, logo_y, logo_size,
             initials=tier.initials,
             fill=INK_BLUE if tier.accent else INK_BLACK,
+            entity_name=tier.name,
+            base_image=img,
         )
 
         # Left text column (name + role label + description)

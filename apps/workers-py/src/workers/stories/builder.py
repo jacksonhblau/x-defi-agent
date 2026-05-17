@@ -383,6 +383,13 @@ def signal_to_story_brief(signal: dict[str, Any]) -> dict[str, Any]:
     base["format_recommendation"] = formats
     base["graphic_spec"] = None
     base["signal_ids"] = [signal["id"]]
+
+    # ---- Algo-refit v2 enrichment ----
+    # Every brief gets `tiers`, `flow_labels`, and `supporting_stats` so the
+    # graphics pipeline has structured layout content regardless of which
+    # source built the brief. See workers.stories.enrichment for the shape.
+    from .enrichment import enrich_for_graphics as _enrich_for_graphics
+    _enrich_for_graphics(base)
     return base
 
 
